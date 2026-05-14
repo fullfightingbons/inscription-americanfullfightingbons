@@ -1,16 +1,48 @@
 {
-	"compatibility_date": "2025-10-08",
-	"main": "src/index.ts",
-	"name": "inscription-americanfullfightingbons",
-	"upload_source_maps": true,
-	"d1_databases": [
-		{
-			"binding": "DB",
-			"database_id": "8af102bc-cbed-4134-b525-cf4e3170539d",
-			"database_name": "inscription-americanfullfightingdb"
-		}
-	],
-	"observability": {
-		"enabled": true
-	}
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "inscription-americanfullfightingbons",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-12-17",
+  "upload_source_maps": true,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/",
+      "/inscription",
+      "/inscription-config",
+      "/api/*"
+    ]
+  },
+  "vars": {
+    "APP_NAME": "AFFBC",
+    "SUPABASE_EXPORT_DIR": "./cloudflare/export",
+    "SIGNUP_ALERT_TO": "fullfightingbons@gmail.com",
+    "SIGNUP_ALERT_FROM": "inscription@americanfullfightingbons.fr",
+    "SIGNUP_ALERT_SENDER_NAME": "AFFBC Inscriptions",
+    "SIGNUP_ALERT_TO_NAME": "AFFBC",
+    "PAYMENT_CURRENCY": "EUR",
+    "HELLOASSO_ORGANIZATION_SLUG": "american-full-fighting-bons-en-chablais",
+    "HELLOASSO_ENV": "production"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_id": "678b90d9-5d87-4011-b077-af5a4d0358ee",
+      "database_name": "affbc-prod"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "R2_STORAGE",
+      "bucket_name": "storage"
+    },
+    {
+      "binding": "R2_PDF",
+      "bucket_name": "fullfighting-pdf"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
 }

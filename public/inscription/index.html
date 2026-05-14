@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Inscription en ligne au club American Full Fighting Bons en Chablais.">
+<title>American Full Fighting — Inscription en ligne</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=Cormorant+Garamond:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/inscription.css">
+</head>
+<body>
+  <div class="signup-shell">
+    <header class="signup-hero">
+      <div class="hero-brand">
+        <img id="club-logo" class="hero-logo" src="/cloudflare/export/assets/storage/Logo_1_nnoir_copie-removebg-preview.png" alt="Logo du club">
+        <div>
+          <div class="hero-kicker">Saison sportive</div>
+          <h1 id="club-name">American Full Fighting</h1>
+          <p id="club-contact" class="hero-contact"></p>
+          <div class="hero-meta">
+            <span class="meta-chip">Inscription 100 % en ligne</span>
+            <span class="meta-chip">Validation en 8 étapes</span>
+            <span class="meta-chip">Licence fédérale incluse</span>
+          </div>
+        </div>
+      </div>
+      <div class="hero-card">
+        <div class="hero-pill">Inscription en ligne</div>
+        <h2>Du dossier papier au parcours numérique complet</h2>
+        <p>Chaque étape reprend les informations du dossier d'inscription, avec validation obligatoire avant de continuer.</p>
+        <ul id="hero-schedule" class="hero-list"></ul>
+        <div class="hero-stats" id="hero-stats"></div>
+      </div>
+    </header>
+
+    <main class="signup-main">
+      <aside class="signup-sidebar">
+        <div class="sidebar-card">
+          <div class="sidebar-title">Progression</div>
+          <div id="step-list" class="step-list"></div>
+        </div>
+        <div class="sidebar-card">
+          <div class="sidebar-title">Résumé rapide</div>
+          <div id="quick-summary" class="quick-summary"></div>
+        </div>
+
+        <div class="sidebar-card">
+          <div class="sidebar-title">Rappels utiles</div>
+          <ul class="sidebar-bullets">
+            <li>Photo d'identité obligatoire</li>
+            <li>Certificat médical obligatoire selon profil</li>
+            <li>Chaque étape doit être complète pour passer à la suivante</li>
+          </ul>
+        </div>
+        <div class="sidebar-card">
+          <div class="sidebar-title">Pièces à prévoir</div>
+          <div class="checklist-compact">
+            <div class="checklist-line">Photo d'identité récente</div>
+            <div class="checklist-line">Certificat médical si nécessaire</div>
+            <div class="checklist-line">Justificatif Pass Région si utilisé</div>
+            <div class="checklist-line">Justificatif tarif pro si demandé</div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="signup-panel">
+        <div class="form-toolbar">
+          <div class="progress-card">
+            <div class="progress-head">
+              <strong id="progress-text">Étape 1 sur 8</strong>
+              <span id="draft-badge" class="draft-badge">Brouillon non enregistré</span>
+            </div>
+            <div class="progress-track" aria-hidden="true">
+              <div id="progress-fill" class="progress-fill"></div>
+            </div>
+          </div>
+          <button type="button" class="btn btn-small" id="clear-draft-button">Effacer le brouillon</button>
+        </div>
+
+        <div id="draft-alert" class="alert alert-info" hidden></div>
+        <div id="signup-alert" class="alert" hidden></div>
+
+        <form id="signup-form" novalidate>
+          <input type="text" name="website" autocomplete="off" tabindex="-1" class="honeypot">
+
+          <div class="step-panel active" data-step="0">
+            <div class="step-heading">
+              <div class="step-num">01</div>
+              <div>
+                <div class="step-eyebrow">Bienvenue</div>
+                <h2>Avant de commencer</h2>
+              </div>
+            </div>
+            <div class="intro-grid">
+              <article class="info-card">
+                <h3>Ce que couvre l'inscription</h3>
+                <p>État civil, coordonnées, urgence, autorisation parentale, santé, règlement intérieur, droit à l'image, tenue du club .</p>
+              </article>
+              <article class="info-card">
+                <h3>Ce qu'il faut préparer</h3>
+                <p>Photo d'identité, certificat médical si nécessaire, justificatif tarif pro et Pass Région si vous les demandez.</p>
+              </article>
+              <article class="info-card">
+                <h3>Lieu des entraînements</h3>
+                <p id="dojo-address"></p>
+              </article>
+            </div>
+            <div class="intro-layout">
+              <article class="feature-panel">
+                <div class="section-mini">Parcours d'inscription</div>
+                <h3>Une fiche plus claire, avant l'envoi du dossier</h3>
+                <div class="feature-list">
+                  <div class="feature-item">
+                    <strong>Informations personnelles</strong>
+                    <span>État civil, contact, urgence et représentant légal si le pratiquant est mineur.</span>
+                  </div>
+                  <div class="feature-item">
+                    <strong>Contrôles réglementaires</strong>
+                    <span>Questionnaire de santé, certificat médical selon le profil et acceptation du règlement intérieur.</span>
+                  </div>
+                  <div class="feature-item">
+                    <strong>Validation financière</strong>
+                    <span>Résumé automatique de la cotisation, des vêtements du club, du passeport sportif .</span>
+                  </div>
+                </div>
+              </article>
+              <article class="feature-panel accent-panel">
+                <div class="section-mini">Avant de démarrer</div>
+                <h3>Prépare ton dossier complet</h3>
+                <div class="prep-grid">
+                  <div class="prep-card">
+                    <strong>Obligatoire</strong>
+                    <span>Photo d'identité et coordonnées complètes.</span>
+                  </div>
+                  <div class="prep-card">
+                    <strong>Santé</strong>
+                    <span>Certificat pour les mineurs ou si le QS-Sport fait apparaître une réponse positive.</span>
+                  </div>
+                  <div class="prep-card">
+                    <strong>Tarifs aidés</strong>
+                    <span>Pass Région et tarif pro uniquement sur justificatif joint dès l'inscription.</span>
+                  </div>
+                  <div class="prep-card">
+                    <strong>Équipement</strong>
+                    <span>Prévois la tenue noire validée par le club et l'équipement de protection demandé.</span>
+                  </div>
+                </div>
+              </article>
+            </div>
+            <div class="panel-actions">
+              <button type="button" class="btn primary" data-next>Commencer l'inscription</button>
+            </div>
+          </div>
+
+          <div class="step-panel" data-step="1">
+            <div class="step-heading">
+              <div class="step-num">02</div>
+              <div>
+                <div class="step-eyebrow">Identité</div>
+                <h2>État civil du pratiquant</h2>
+              </div>
+            </div>
+            <div class="form-grid two">
+              <label class="field">
+                <span>Nom</span>
+                <input id="lastName" autocomplete="family-name" required>
+              </label>
+              <label class="field">
+                <span>Prénom</span>
+                <input id="firstName" autocomplete="given-name" required>
+              </label>
+              <label class="field">
+                <span>Date de naissance</span>
+                <input id="birthDate" type="date" min="1920-01-01" required>
+                <small>La date doit être dans le passé</small>
+              </label>
+              <label class="field">
+                <span>Lieu de naissance</span>
+                <input id="birthPlace" autocomplete="off" required>
+              </label>
+              <label class="field field-full">
+                <span>Photo d'identité</span>
+                <input id="photoIdentity" type="file" accept="image/jpeg,image/png" required>
+                <small>JPEG ou PNG uniquement. Obligatoire pour le dossier.</small>
+              </label>
+            </div>
+            <div class="panel-actions">
+              <button type="button" class="btn" data-prev>Retour</button>
+              <button type="button" class="btn primary" data-next>Continuer</button>
+            </div>
+          </div>
+
+          <div class="step-panel" data-step="2">
+            <div class="step-heading">
+              <div class="step-num">03</div>
+              <div>
+                <div class="step-eyebrow">Coordonnées</div>
+                <h2>Contact du pratiquant et urgence</h2>
+              </div>
+            </div>
+            <div class="form-grid two">
+              <label class="field field-full">
+                <span>Adresse</span>
+                <input id="address1" autocomplete="street-address" required>
+              </label>
+              <label class="field field-full">
+                <span>Complément d'adresse</span>
+                <input id="address2" autocomplete="address-line2" required placeholder="Si aucun, indiquez Néant">
+              </label>
+              <label class="field">
+                <span>Code postal</span>
+                <input id="postalCode" type="text" inputmode="numeric" autocomplete="postal-code" pattern="[0-9]{5}" maxlength="5" placeholder="Ex : 74890" required>
+                <small>5 chiffres obligatoires</small>
+              </label>
+              <label class="field">
+                <span>Ville</span>
+                <input id="city" autocomplete="address-level2" required>
+              </label>
+              <label class="field">
+                <span>Téléphone principal</span>
+                <input id="phonePrimary" type="tel" inputmode="tel" autocomplete="tel" pattern="[0-9+][0-9 .]{8,14}" title="Numéro de téléphone valide (ex : 0612345678)" required>
+              </label>
+              <label class="field">
+                <span>Téléphone secondaire</span>
+                <input id="phoneSecondary" type="tel" inputmode="tel" autocomplete="tel-national" pattern="[0-9+][0-9 .]{8,14}" title="Numéro de téléphone valide (ex : 0612345678)" required placeholder="Répétez le même si besoin">
+              </label>
+              <label class="field field-full">
+                <span>Email</span>
+                <input id="email" type="email" autocomplete="email" required>
+              </label>
+            </div>
+            <div class="section-title">Personne à joindre en cas d'urgence</div>
+            <div class="form-grid two">
+              <label class="field">
+                <span>Nom</span>
+                <input id="emergencyLastName" autocomplete="family-name" required>
+              </label>
+              <label class="field">
+                <span>Prénom</span>
+                <input id="emergencyFirstName" autocomplete="given-name" required>
+              </label>
+              <label class="field">
+                <span>Téléphone principal</span>
+                <input id="emergencyPhonePrimary" type="tel" inputmode="tel" autocomplete="tel" pattern="[0-9+][0-9 .]{8,14}" title="Numéro de téléphone valide (ex : 0612345678)" required>
+              </label>
+              <label class="field">
+                <span>Téléphone secondaire</span>
+                <input id="emergencyPhoneSecondary" type="tel" inputmode="tel" autocomplete="tel-national" pattern="[0-9+][0-9 .]{8,14}" title="Numéro de téléphone valide (ex : 0612345678)" required placeholder="Répétez le même si besoin">
+              </label>
+            </div>
+            <div class="panel-actions">
+              <button type="button" class="btn" data-prev>Retour</button>
+              <button type="button" class="btn primary" data-next>Continuer</button>
+            </div>
+          </div>
+
+          <div class="step-panel" data-step="3">
+            <div class="step-heading">
+              <div class="step-num">04</div>
+              <div>
+                <div class="step-eyebrow">Pratique</div>
+                <h2>Pratique, formule et autorisation parentale</h2>
+              </div>
+            </div>
+            <div class="form-grid two">
+              <label class="field">
+                <span>Type d'inscription</span>
+                <select id="typeInscription" required>
+                  <option value="">Choisir</option>
+                  <option value="nouvelle">Nouvelle adhésion</option>
+                  <option value="renouvellement">Renouvellement</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Type de pratique</span>
+                <select id="practiceType" required>
+                  <option value="">Choisir</option>
+                  <option value="loisir">Loisir</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Formule tarifaire</span>
+                <select id="formulaCode" required>
+                  <option value="">Choisir</option>
+                  <option value="base">Tarif de base</option>
+                  <option value="family">Tarif famille</option>
+                  <option value="pro">Tarif pro</option>
+                  <option value="cse_thales">Tarif CSE Thalès</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Passeport sportif <small style="font-weight:normal;color:var(--muted)">(obligatoire pour les compétitions et passage de ceinture noire)</small></span>
+                <select id="passportEnabled" required>
+                  <option value="">Choisir</option>
+                  <option value="false">Non</option>
+                  <option value="true">Oui</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Pass Région utilisé ?</span>
+                <select id="passRegionEnabled" required>
+                  <option value="">Choisir</option>
+                  <option value="false">Non</option>
+                  <option value="true">Oui</option>
+                </select>
+              </label>
+              <label class="field conditional" data-show-when="passRegion">
+                <span>Montant de remise Pass Région</span>
+                <select id="passRegionAmount">
+                  <option value="">Choisir</option>
+                  <option value="30">Garçon - 30 €</option>
+                  <option value="60">Fille - 60 €</option>
+                </select>
+              </label>
+              <label class="field conditional" data-show-when="passRegion">
+                <span>Code Pass Région à 4 chiffres</span>
+                <input id="passRegionCode" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" placeholder="Exemple : 1234">
+                <small>Le code à 4 chiffres est requis si le Pass Région est utilisé.</small>
+              </label>
+              <label class="field conditional" data-show-when="proofNeeded">
+                <span>Justificatif tarif réduit</span>
+                <input id="proProofDocument" type="file" accept="application/pdf,image/*">
+              </label>
+              <label class="field conditional field-full" data-show-when="passRegion">
+                <span>Justificatif Pass Région</span>
+                <input id="passRegionDocument" type="file" accept="application/pdf,image/*">
+              </label>
+            </div>
+
+            <div id="minor-block" class="minor-block" hidden>
+              <div class="section-title">Autorisation parentale</div>
+              <div class="form-grid two">
+                <label class="field">
+                  <span>Nom du représentant légal</span>
+                  <input id="legalLastName">
+                </label>
+                <label class="field">
+                  <span>Prénom du représentant légal</span>
+                  <input id="legalFirstName">
+                </label>
+                <label class="field">
+                  <span>Qualité</span>
+                  <select id="legalRole">
+                    <option value="">Choisir</option>
+                    <option value="pere">Père</option>
+                    <option value="mere">Mère</option>
+                    <option value="representant_legal">Représentant légal</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Ville de signature</span>
+                  <input id="legalCity">
+                </label>
+                <label class="field">
+                  <span>Date de signature</span>
+                  <input id="legalSignedAt" type="date">
+                </label>
+                <label class="field">
+                  <span>Nom tapé pour signature</span>
+                  <input id="legalSignatureName" placeholder="Nom et prénom">
+                </label>
+              </div>
+            </div>
+            <div class="panel-actions">
+              <button type="button" class="btn" data-prev>Retour</button>
+              <button type="button" class="btn primary" data-next>Continuer</button>
+            </div>
+          </div>
+
+          <div class="step-panel" data-step="4">
+            <div class="step-heading">
+              <div class="step-num">05</div>
+              <div>
+                <div class="step-eyebrow">Santé</div>
+                <h2>Questionnaire de santé et certificat</h2>
+              </div>
+            </div>
+            <div class="health-box">
+              <p>Répondez obligatoirement à chaque question. Un certificat médical devient obligatoire pour les mineurs, ou si une réponse est positive.</p>
+            </div>
+            <div id="qs-grid" class="qs-grid"></div>
+            <div id="medical-upload-block" class="conditional" hidden>
+              <label class="field field-full">
+                <span>Certificat médical / certificat compétition</span>
+                <input id="medicalCertificate" type="file" accept="application/pdf,image/*">
+              </label>
+            </div>
+            <div class="panel-actions">
+              <button type="button" class="btn" data-prev>Retour</button>
+              <button type="button" class="btn primary" data-next>Continuer</button>
+            </div>
+          </div>
+
+          <div class="step-panel" data-step="5">
+            <div class="step-heading">
+              <div class="step-num">06</div>
+              <div>
+                <div class="step-eyebrow">Commandes</div>
+                <h2>Tenue du club</h2>
+              </div>
+            </div>
+            <div class="info-banner">
+              Les nouveaux adhérents ont automatiquement la tenue du club à 35 € en plus de la cotisation. Tu peux ajuster les quantités si nécessaire.
+            </div>
+            <div class="order-block">
+              <div class="section-title">Vêtements boxe</div>
+              <div class="order-table" id="clothing-order"></div>
+            </div>
+            <div class="panel-actions">
+              <button type="button" class="btn" data-prev>Retour</button>
+              <button type="button" class="btn primary" data-next>Continuer</button>
+            </div>
+          </div>
+
+          <div class="step-panel" data-step="6">
+            <div class="step-heading">
+              <div class="step-num">07</div>
+              <div>
+                <div class="step-eyebrow">Engagements</div>
+                <h2>Règlement intérieur et droit à l'image</h2>
+              </div>
+            </div>
+            <div class="rules-grid">
+              <article class="rule-card">
+                <div class="card-kicker">Cadre général</div>
+                <h3>Règlement intérieur</h3>
+                <p>Le dossier papier précise les règles de présence, de discipline, de tenue, d'hygiène et de respect du dojo. Cette version web les reprend de manière structurée avant validation.</p>
+              </article>
+              <article class="rule-card">
+                <div class="card-kicker">Licence fédérale</div>
+                <h3>Assurance et sécurité</h3>
+                <p>Le PDF d'inscription indique que la couverture passe par la licence FFK, remise après dossier complet et cotisation réglée. Les modalités et contacts sont détaillés ci-dessous.</p>
+              </article>
+              <article class="rule-card">
+                <div class="card-kicker">Consentement</div>
+                <h3>Droit à l'image</h3>
+                <p>Le choix d'autoriser ou non la diffusion de photos et vidéos prises pendant les entraînements, stages ou compétitions reste obligatoire pour finaliser le dossier.</p>
+              </article>
+            </div>
+            <div class="policy-layout">
+              <section class="policy-section">
+                <div class="section-mini">Règlement détaillé</div>
+                <h3>Les points essentiels du règlement intérieur</h3>
+                <div class="policy-grid">
+                  <article class="policy-card">
+                    <strong>Horaires et ponctualité</strong>
+                    <p>Les entraînements ont lieu au Centre Sportif Intercommunal des Voirons. Le dossier demande une arrivée au minimum 15 minutes avant le cours pour garantir le bon déroulement de la séance.</p>
+                  </article>
+                  <article class="policy-card">
+                    <strong>Pratiquants mineurs</strong>
+                    <p>Le document attire l'attention des représentants légaux sur l'exigence physique et la concentration demandée, avec une vigilance renforcée pour les moins de 15 ans.</p>
+                  </article>
+                  <article class="policy-card">
+                    <strong>Locaux et matériel</strong>
+                    <p>Le dojo n'appartient pas au club : tatamis, sacs, vestiaires, douches et matériel prêté doivent être respectés, rangés et signalés en cas de dégradation constatée.</p>
+                  </article>
+                  <article class="policy-card">
+                    <strong>Respect et discipline</strong>
+                    <p>Aucun propos discriminatoire, humiliant ou harcelant n'est toléré. Les valeurs du club reposent sur le respect, la discipline et une attitude irréprochable sur et hors tapis.</p>
+                  </article>
+                  <article class="policy-card">
+                    <strong>Tenue et hygiène</strong>
+                    <p>La tenue noire validée par le club, la ceinture de couleur, les cheveux attachés, l'absence de bijoux et une hygiène rigoureuse sont imposées pendant les entraînements.</p>
+                  </article>
+                  <article class="policy-card">
+                    <strong>Équipement obligatoire</strong>
+                    <p>Casque à arête nasale, protège-dents, gants homologués, bandes, protections intimes, protège-tibias, protège-pieds, corde à sauter, serviette, eau et sandales font partie du matériel attendu.</p>
+                  </article>
+                  <article class="policy-card">
+                    <strong>Sanctions</strong>
+                    <p>Le règlement prévoit avertissement verbal, sortie du cours, exclusion temporaire ou définitive sans remboursement en cas de manquement grave ou répété.</p>
+                  </article>
+                </div>
+              </section>
+              <section class="policy-section">
+                <div class="section-mini">Assurance et licence</div>
+                <h3>Modalités d'assurance reprises du dossier PDF</h3>
+                <div class="insurance-panel">
+                  <div class="insurance-highlight">
+                    <strong>Point de référence</strong>
+                    <p>Le dossier papier précise qu'une licence sportive de karaté full contact est remise au pratiquant après réception d'un dossier complet et règlement de la cotisation.</p>
+                  </div>
+                  <div class="insurance-columns">
+                    <article class="insurance-card">
+                      <strong>Ce que couvre la licence</strong>
+                      <p>Le pratiquant licencié auprès de la FFK est couvert en cas d'accident survenu lors d'un entraînement, d'un stage ou d'une compétition relevant du cadre fédéral du club.</p>
+                    </article>
+                    <article class="insurance-card">
+                      <strong>Conditions pratiques</strong>
+                      <p>En pratique, la partie assurance repose sur un dossier administratif finalisé, la validation du profil santé et la cotisation réglée afin que la licence puisse être émise.</p>
+                    </article>
+                    <article class="insurance-card">
+                      <strong>Contact assureur communiqué</strong>
+                      <p>WTW DGPL Fédérations, 2 Rue de Gourville, 45911 Orléans Cedex 9, <a href="mailto:ffkarate@wtwco.com">ffkarate@wtwco.com</a>.</p>
+                    </article>
+                  </div>
+                  <div class="insurance-note">
+                    <strong>Important</strong>
+                    <span>Les obligations de santé, d'équipement et de comportement restent applicables. Le club rappelle également que le certificat médical demeure obligatoire pour les mineurs et pour tout profil concerné par le questionnaire de santé.</span>
+                  </div>
+                </div>
+              </section>
+              <section class="policy-section">
+                <div class="section-mini">Droit à l'image</div>
+                <h3>Diffusion des photos et vidéos du club</h3>
+                <div class="image-rights-box">
+                  <p>Le PDF prévoit la diffusion possible d'images prises pendant les entraînements, stages et compétitions sur les réseaux sociaux, le site du club et, le cas échéant, dans la presse à but non commercial. Ton choix est enregistré ci-dessous, avec la possibilité de refuser cette diffusion.</p>
+                </div>
+              </section>
+            </div>
+            <div class="form-grid two">
+              <label class="field check-field field-full">
+                <input id="rulesAccepted" type="checkbox" required>
+                <span>Je reconnais avoir lu le règlement intérieur et l'accepter sans réserve.</span>
+              </label>
+              <label class="field check-field field-full">
+                <input id="insuranceAcknowledged" type="checkbox" required>
+                <span>Je reconnais avoir pris connaissance des modalités d'assurance liées à la licence fédérale et du fait que le dossier doit être complet pour permettre l'émission de la licence.</span>
+              </label>
+              <label class="field">
+                <span>Droit à l'image</span>
+                <select id="imageRights" required>
+                  <option value="">Choisir</option>
+                  <option value="yes">J'autorise</option>
+                  <option value="no">Je n'autorise pas</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Date de signature</span>
+                <input id="consentSignedAt" type="date" required>
+              </label>
+              <label class="field">
+                <span>Nom tapé pour signature du pratiquant</span>
+                <input id="applicantSignatureName" required>
+              </label>
+            </div>
+            <div class="panel-actions">
+              <button type="button" class="btn" data-prev>Retour</button>
+              <button type="button" class="btn primary" data-next>Continuer</button>
+            </div>
+          </div>
+
+          <div class="step-panel" data-step="7">
+            <div class="step-heading">
+              <div class="step-num">08</div>
+              <div>
+                <div class="step-eyebrow">Paiement</div>
+                <h2>Paiement et validation finale</h2>
+              </div>
+            </div>
+            <div class="payment-grid">
+              <div id="online-payment-info" class="info-banner" hidden>
+                Le dossier sera enregistré immédiatement. Le règlement en ligne s'effectuera juste après validation, depuis la page de confirmation.
+              </div>
+              <div class="payment-card accent">
+                <h3>Résumé du dossier</h3>
+                <div id="final-summary" class="final-summary"></div>
+              </div>
+              <!-- champ mode paiement conservé mais caché, utilisé par le JS -->
+              <select id="paymentMethod" hidden>
+                <option value="helloasso" data-provider="helloasso" selected>HelloAsso</option>
+              </select>
+            </div>
+            <div class="alert" style="border-color:rgba(162,53,33,.35);background:rgba(162,53,33,.08);color:var(--red-dark);margin-bottom:18px;border-radius:18px;padding:14px 16px;font-size:14px;">
+              ⚠️ <strong>Aucun remboursement ne pourra être réclamé en cours d'année une fois le dossier validé.</strong> Vérifiez bien l'ensemble des informations saisies avant d'envoyer votre inscription.
+            </div>
+            <div class="form-grid two">
+              <label class="field">
+                <span>Prénom du payeur</span>
+                <input id="payerFirstName" autocomplete="given-name" required>
+              </label>
+              <label class="field">
+                <span>Nom du payeur</span>
+                <input id="payerLastName" autocomplete="family-name" required>
+              </label>
+            </div>
+            <div class="panel-actions">
+              <button type="button" class="btn" data-prev>Retour</button>
+              <button type="submit" class="btn primary" id="submit-button">Envoyer l'inscription</button>
+            </div>
+          </div>
+        </form>
+
+        <div id="success-panel" class="success-panel" hidden>
+          <div class="hero-pill">Dossier envoyé</div>
+          <h2>Inscription enregistrée</h2>
+          <p id="success-message"></p>
+          <div id="payment-status" class="success-note" hidden></div>
+          <div id="success-actions" class="success-actions"></div>
+          <div id="online-payment-actions" class="online-payment-actions" hidden>
+            <button type="button" class="btn primary" id="pay-online-button" hidden></button>
+            <div id="paypal-button-container" hidden></div>
+          </div>
+          <button type="button" class="btn" onclick="window.location.reload()">Déposer une autre inscription</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/vendor/jspdf/jspdf.umd.min.js"></script>
+  <script src="/assets/inscription.js" defer></script>
+</body>
+</html>
