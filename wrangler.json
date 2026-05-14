@@ -14,6 +14,12 @@
       "/api/*"
     ]
   },
+  "routes": [
+    {
+      "pattern": "inscription.americanfullfightingbons.fr",
+      "custom_domain": true
+    }
+  ],
   "vars": {
     "APP_NAME": "AFFBC",
     "SUPABASE_EXPORT_DIR": "./cloudflare/export",
