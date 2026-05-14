@@ -19,6 +19,10 @@ function redirect(url: URL, pathname: string, status = 302) {
   return Response.redirect(next.toString(), status);
 }
 
+function redirectToCanonicalInscription(status = 302) {
+  return Response.redirect("https://inscription.americanfullfightingbons.fr/inscription/", status);
+}
+
 function methodNotAllowed(methods: string[]) {
   return new Response("Method Not Allowed", {
     status: 405,
@@ -33,8 +37,8 @@ export default {
     const method = request.method.toUpperCase();
     const context: AppContext = { request, env };
 
-    if (path === "/") {
-      return redirect(url, "/inscription/");
+    if (path === "/" || path === "/index.html") {
+      return redirectToCanonicalInscription();
     }
 
     if (path === "/inscription") {
