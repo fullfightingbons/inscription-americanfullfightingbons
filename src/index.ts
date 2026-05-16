@@ -1,5 +1,7 @@
 import { onRequestGet as getInscriptionConfig } from "./routes/api/public/inscription-config.js";
+import { onRequestGet as getAdherentEligibility } from "./routes/api/public/adherent-eligibility.js";
 import { onRequestPost as postInscription } from "./routes/api/public/inscription.js";
+import { onRequestPost as postHelloAssoNotification } from "./routes/api/public/payment/helloasso/notification.js";
 import { onRequestGet as getHelloAssoStatus } from "./routes/api/public/payment/helloasso/status.js";
 
 type WorkerEnv = {
@@ -12,15 +14,21 @@ type AppContext = {
   env: WorkerEnv;
 };
 
-function redirect(url: URL, pathname: string, status = 302) {
+function getPublicOrigin(url: URL, env: WorkerEnv) {
+  return String(env.PUBLIC_ORIGIN || url.origin).replace(/\/+$/, "");
+}
+
+function redirect(url: URL, pathname: string, status = 302, preserveSearch = false) {
   const next = new URL(url.toString());
   next.pathname = pathname;
-  next.search = "";
+  if (!preserveSearch) {
+    next.search = "";
+  }
   return Response.redirect(next.toString(), status);
 }
 
-function redirectToCanonicalInscription(status = 302) {
-  return Response.redirect("https://inscription.americanfullfightingbons.fr/inscription/", status);
+function redirectToCanonicalRoot(url: URL, env: WorkerEnv, status = 302) {
+  return Response.redirect(`${getPublicOrigin(url, env)}/`, status);
 }
 
 function methodNotAllowed(methods: string[]) {
@@ -37,12 +45,12 @@ export default {
     const method = request.method.toUpperCase();
     const context: AppContext = { request, env };
 
-    if (path === "/" || path === "/index.html") {
-      return redirectToCanonicalInscription();
+    if (path === "/index.html") {
+      return redirectToCanonicalRoot(url, env);
     }
 
-    if (path === "/inscription") {
-      return redirect(url, "/inscription/");
+    if (path === "/inscription" || path === "/inscription/" || path === "/inscription/index.html") {
+      return redirect(url, "/", 302, true);
     }
 
     if (path === "/inscription-config") {
@@ -59,11 +67,25 @@ export default {
       return postInscription(context);
     }
 
+    if (path === "/api/public/adherent-eligibility") {
+      if (method !== "GET" && method !== "HEAD") {
+        return methodNotAllowed(["GET", "HEAD"]);
+      }
+      return getAdherentEligibility(context);
+    }
+
     if (path === "/api/public/payment/helloasso/status") {
       if (method !== "GET" && method !== "HEAD") {
         return methodNotAllowed(["GET", "HEAD"]);
       }
       return getHelloAssoStatus(context);
+    }
+
+    if (path === "/api/public/payment/helloasso/notification") {
+      if (method !== "POST") {
+        return methodNotAllowed(["POST"]);
+      }
+      return postHelloAssoNotification(context);
     }
 
     if (env.ASSETS) {

@@ -14,17 +14,10 @@
       "/api/*"
     ]
   },
-  "routes": [
-    {
-      "pattern": "inscription.americanfullfightingbons.fr",
-      "custom_domain": true
-    }
-  ],
   "vars": {
     "APP_NAME": "AFFBC",
-    "SUPABASE_EXPORT_DIR": "./cloudflare/export",
     "SIGNUP_ALERT_TO": "fullfightingbons@gmail.com",
-    "SIGNUP_ALERT_FROM": "inscription@americanfullfightingbons.fr",
+    "SIGNUP_ALERT_FROM": "contact@americanfullfightingbons.fr",
     "SIGNUP_ALERT_SENDER_NAME": "AFFBC Inscriptions",
     "SIGNUP_ALERT_TO_NAME": "AFFBC",
     "PAYMENT_CURRENCY": "EUR",
@@ -35,7 +28,7 @@
     {
       "binding": "DB",
       "database_id": "678b90d9-5d87-4011-b077-af5a4d0358ee",
-      "database_name": "affbc-prod"
+      "database_name": "affbc-production"
     }
   ],
   "r2_buckets": [

@@ -1,59 +1,96 @@
-# Worker + D1 Database
+# Inscription AFFBC
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/cloudflare/templates/tree/main/d1-template)
+Application publique d'inscription pour `inscription.americanfullfightingbons.fr`, déployée sur Cloudflare Workers avec :
 
-![Worker + D1 Template Preview](https://imagedelivery.net/wSMYJvS3Xw-n339CbDyDIA/cb7cb0a9-6102-4822-633c-b76b7bb25900/public)
+- un frontend statique servi depuis `public/`
+- un worker principal dans `src/index.ts`
+- une base D1 pour les données métier
+- R2 pour le stockage des pièces justificatives
+- HelloAsso pour le paiement en ligne
 
-<!-- dash-content-start -->
+## Structure
 
-D1 is Cloudflare's native serverless SQL database ([docs](https://developers.cloudflare.com/d1/)). This project demonstrates using a Worker with a D1 binding to execute a SQL statement. A simple frontend displays the result of this query:
+- `public/index.html` : page d'inscription servie à la racine
+- `public/assets/` : CSS et JavaScript du frontend
+- `src/index.ts` : routage du worker
+- `src/routes/api/public/inscription-config.js` : configuration publique du formulaire
+- `src/routes/api/public/inscription.js` : création du dossier + session HelloAsso
+- `src/routes/api/public/payment/helloasso/status.js` : validation du paiement et finalisation métier
+- `migrations/` : schéma D1
 
-```SQL
-SELECT * FROM comments LIMIT 3;
+## Pré-requis
+
+- Node.js
+- `npm install`
+- compte Cloudflare avec Worker, D1 et R2 configurés
+- secrets HelloAsso configurés dans Cloudflare si le paiement en ligne est actif
+
+## Scripts
+
+```bash
+npm install
+npm run check
+npm run deploy
 ```
 
-The D1 database is initialized with a `comments` table and this data:
+Scripts disponibles :
 
-```SQL
-INSERT INTO comments (author, content)
-VALUES
-    ('Kristian', 'Congrats!'),
-    ('Serena', 'Great job!'),
-    ('Max', 'Keep up the good work!')
-;
+- `npm run check` : TypeScript + `wrangler deploy --dry-run`
+- `npm run deploy` : applique les migrations D1 distantes puis déploie le worker
+- `npm run dev` : applique les migrations locales puis lance Wrangler en local
+- `npm run cf-typegen` : régénère `worker-configuration.d.ts`
+
+## Déploiement
+
+Le projet est prévu pour être publié via Wrangler :
+
+```bash
+npm run deploy
 ```
 
-> [!IMPORTANT]
-> When using C3 to create this project, select "no" when it asks if you want to deploy. You need to follow this project's [setup steps](https://github.com/cloudflare/templates/tree/main/d1-template#setup-steps) before deploying.
+Le domaine public peut être raccordé :
 
-<!-- dash-content-end -->
+- soit via `workers.dev`
+- soit via un `CNAME` externe pointant vers l'URL `workers.dev` du worker
 
-## Getting Started
+## Variables et bindings
 
-Outside of this repo, you can start a new project with this template using [C3](https://developers.cloudflare.com/pages/get-started/c3/) (the `create-cloudflare` CLI):
+La configuration principale se trouve dans `wrangler.json`.
 
-```
-npm create cloudflare@latest -- --template=cloudflare/templates/d1-template
-```
+Bindings attendus :
 
-A live public deployment of this template is available at [https://d1-template.templates.workers.dev](https://d1-template.templates.workers.dev)
+- `DB` : base D1
+- `R2_STORAGE` : bucket des pièces justificatives
+- `R2_PDF` : bucket PDF
+- `ASSETS` : assets statiques
 
-## Setup Steps
+Variables non sensibles déjà déclarées :
 
-1. Install the project dependencies with a package manager of your choice:
-   ```bash
-   npm install
-   ```
-2. Create a [D1 database](https://developers.cloudflare.com/d1/get-started/) with the name "d1-template-database":
-   ```bash
-   npx wrangler d1 create d1-template-database
-   ```
-   ...and update the `database_id` field in `wrangler.json` with the new database ID.
-3. Run the following db migration to initialize the database (notice the `migrations` directory in this project):
-   ```bash
-   npx wrangler d1 migrations apply --remote d1-template-database
-   ```
-4. Deploy the project!
-   ```bash
-   npx wrangler deploy
-   ```
+- `APP_NAME`
+- `SUPABASE_EXPORT_DIR`
+- `SIGNUP_ALERT_TO`
+- `SIGNUP_ALERT_FROM`
+- `SIGNUP_ALERT_SENDER_NAME`
+- `SIGNUP_ALERT_TO_NAME`
+- `PAYMENT_CURRENCY`
+- `HELLOASSO_ORGANIZATION_SLUG`
+- `HELLOASSO_ENV`
+
+Secrets attendus côté Cloudflare selon l'environnement :
+
+- `HELLOASSO_CLIENT_ID`
+- `HELLOASSO_CLIENT_SECRET`
+
+Optionnel :
+
+- `PUBLIC_ORIGIN` pour forcer l'origine publique canonique si besoin
+- `HELLOASSO_NOTIFICATION_SIGNATURE_KEY` si vous utilisez une signature webhook HelloAsso
+
+## URLs publiques
+
+- `/` : formulaire d'inscription
+- `/inscription`, `/inscription/` : redirections de compatibilité vers `/`
+- `/inscription-config` : configuration publique du formulaire
+- `/api/public/inscription` : soumission du dossier
+- `/api/public/payment/helloasso/status` : vérification du paiement HelloAsso
+- `/api/public/payment/helloasso/notification` : webhook HelloAsso `Order` / `Payment`

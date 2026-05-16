@@ -16,8 +16,9 @@
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
-const DRAFT_KEY = 'affbc_inscription_draft_v3';
+const DRAFT_KEY = 'affbc_inscription_draft_v4';
 const CONFIG_URL = '/inscription-config';
+const ADHERENT_ELIGIBILITY_URL = '/api/public/adherent-eligibility';
 const SUBMIT_URL = '/api/public/inscription/'; // POST — backend inscription.js
 const STATUS_URL = '/api/public/payment/helloasso/status'; // GET — backend status.js
 const QS_QUESTIONS = [
@@ -41,6 +42,8 @@ const STEP_LABELS = [
 let CONFIG = null;
 let currentStep = 0;
 const TOTAL_STEPS = 8;
+let bureauEligibility = { checked: false, renewalVerified: false, eligibleForBureauRate: false, reason: 'missing_fields' };
+let bureauEligibilityTimer = null;
 
 // ─── Utilitaires DOM ──────────────────────────────────────────────────────────
 
@@ -49,6 +52,34 @@ function val(id) { const el = g(id); return el ? el.value.trim() : ''; }
 function checked(id) { const el = g(id); return el ? el.checked : false; }
 function show(id, v = true) { const el = g(id); if (el) el.hidden = !v; }
 function hide(id) { show(id, false); }
+
+function getInstallmentCount() {
+  const raw = parseInt(val('installmentCount') || '1', 10);
+  return raw === 2 || raw === 3 ? raw : 1;
+}
+
+function getInstallmentLabel(count = getInstallmentCount()) {
+  return `HelloAsso en ${count} fois`;
+}
+
+function splitInstallments(totalCents, count) {
+  const safeCount = count > 1 ? count : 1;
+  const base = Math.floor(totalCents / safeCount);
+  let remainder = totalCents - (base * safeCount);
+  return Array.from({ length: safeCount }, () => {
+    const value = base + (remainder > 0 ? 1 : 0);
+    remainder = Math.max(0, remainder - 1);
+    return value;
+  });
+}
+
+function formatInstallmentSchedule(totalAmount) {
+  const count = getInstallmentCount();
+  if (count <= 1) return 'Paiement comptant via HelloAsso.';
+  const totalCents = Math.round(Number(totalAmount || 0) * 100);
+  const installments = splitInstallments(totalCents, count).map((amount) => `${(amount / 100).toFixed(2)} €`);
+  return `Débit immédiat de ${installments[0]}, puis ${installments.slice(1).join(' puis ')} les mois suivants.`;
+}
 
 function setAlert(msg, type = 'error') {
   const el = g('signup-alert');
@@ -144,6 +175,7 @@ function applyDraft(data) {
   // Paiement
   set('payerFirstName', data.payerFirstName);
   set('payerLastName', data.payerLastName);
+  set('installmentCount', data.installmentCount);
   // Mise à jour des affichages conditionnels
   updateConditionals();
   updateSummary();
@@ -197,6 +229,7 @@ function collectAllFields() {
     consentSignedAt: val('consentSignedAt'), applicantSignatureName: val('applicantSignatureName'),
     payerFirstName: val('payerFirstName'),
     payerLastName: val('payerLastName'),
+    installmentCount: getInstallmentCount(),
   };
 }
 
@@ -221,9 +254,9 @@ function calculateTotals() {
   const passportEnabled = val('passportEnabled') === 'true';
   const clothing = collectClothing();
 
-  const baseMap = { base: p.base, family: p.family, pro: p.pro, cse_thales: p.cseThales };
+  const baseMap = { base: p.base, family: p.family, pro: p.pro, cse_thales: p.cseThales, bureau: p.bureau || 0 };
   const baseCotisation = baseMap[formula];
-  if (!baseCotisation) return null;
+  if (!Number.isFinite(baseCotisation)) return null;
 
   const passRegionAmount = passRegionEnabled ? Number(val('passRegionAmount') || 0) : 0;
   const cotisation = Math.max(0, baseCotisation - passRegionAmount);
@@ -236,6 +269,89 @@ function calculateTotals() {
   const total = cotisation + passport + clothingTotal + newMemberKit;
 
   return { cotisation, passRegionAmount, passport, clothingTotal, tshirtQty, pantalonQty, newMemberKit, total };
+}
+
+function getBureauOptionLabel() {
+  const amount = Number(CONFIG?.pricing?.bureau || 0).toFixed(2);
+  return `Membres du Bureau (${amount} €)`;
+}
+
+function syncBureauFormulaOption() {
+  const formulaSelect = g('formulaCode');
+  const note = g('bureau-member-note');
+  if (!formulaSelect) return;
+
+  let bureauOption = formulaSelect.querySelector('option[value="bureau"]');
+  if (bureauEligibility.eligibleForBureauRate) {
+    if (!bureauOption) {
+      bureauOption = document.createElement('option');
+      bureauOption.value = 'bureau';
+      formulaSelect.appendChild(bureauOption);
+    }
+    bureauOption.textContent = getBureauOptionLabel();
+  } else if (bureauOption) {
+    if (formulaSelect.value === 'bureau') {
+      formulaSelect.value = '';
+    }
+    bureauOption.remove();
+  }
+
+  if (note) {
+    if (bureauEligibility.eligibleForBureauRate) {
+      note.textContent = 'Le renouvellement a été reconnu avec la discipline "membre du bureau" : l’option tarifaire à 0 € est disponible.';
+    } else if (val('typeInscription') !== 'renouvellement') {
+      note.textContent = 'L\'option Membres du Bureau apparaît automatiquement pour les renouvellements reconnus avec cette discipline dans le logiciel de gestion.';
+    } else if (!bureauEligibility.checked) {
+      note.textContent = 'Renseignez nom, prénom, date de naissance et email du dossier existant pour vérifier l\'éligibilité Membres du Bureau.';
+    } else if (bureauEligibility.reason === 'discipline_missing') {
+      note.textContent = 'Renouvellement reconnu, mais la discipline "membre du bureau" n\'est pas présente dans la fiche adhérent.';
+    } else {
+      note.textContent = 'L\'option Membres du Bureau n\'est affichée que si le renouvellement correspond à une fiche adhérent existante avec cette discipline.';
+    }
+  }
+}
+
+function getEligibilityParams() {
+  return new URLSearchParams({
+    typeInscription: val('typeInscription'),
+    lastName: val('lastName'),
+    firstName: val('firstName'),
+    birthDate: val('birthDate'),
+    email: val('email'),
+  });
+}
+
+async function refreshBureauEligibility() {
+  const typeInscription = val('typeInscription');
+  if (typeInscription !== 'renouvellement') {
+    bureauEligibility = { checked: true, renewalVerified: false, eligibleForBureauRate: false, reason: 'not_renewal' };
+    syncBureauFormulaOption();
+    return;
+  }
+
+  if (!val('lastName') || !val('firstName') || !val('birthDate') || !val('email')) {
+    bureauEligibility = { checked: false, renewalVerified: false, eligibleForBureauRate: false, reason: 'missing_fields' };
+    syncBureauFormulaOption();
+    return;
+  }
+
+  try {
+    const res = await fetch(`${ADHERENT_ELIGIBILITY_URL}?${getEligibilityParams().toString()}`, { cache: 'no-store' });
+    const payload = await res.json().catch(() => null);
+    bureauEligibility = payload?.data || { checked: true, renewalVerified: false, eligibleForBureauRate: false, reason: 'fetch_failed' };
+  } catch (e) {
+    bureauEligibility = { checked: true, renewalVerified: false, eligibleForBureauRate: false, reason: 'fetch_failed' };
+  }
+
+  syncBureauFormulaOption();
+  updateSummary();
+}
+
+function scheduleBureauEligibilityRefresh() {
+  if (bureauEligibilityTimer) window.clearTimeout(bureauEligibilityTimer);
+  bureauEligibilityTimer = window.setTimeout(() => {
+    refreshBureauEligibility();
+  }, 250);
 }
 
 // ─── Affichages conditionnels ─────────────────────────────────────────────────
@@ -286,7 +402,7 @@ function updateSummary() {
       ${totals.passport > 0 ? `<div class="summary-line"><strong>Passeport sportif</strong><span>${totals.passport.toFixed(2)} €</span></div>` : ''}
       ${totals.clothingTotal > 0 ? `<div class="summary-line"><strong>Tenue club</strong><span>${totals.clothingTotal.toFixed(2)} € · ${tshirtLabel} · ${pantalonLabel}</span></div>` : ''}
       <div class="summary-line"><strong>Total</strong><span style="font-size:18px;color:var(--red-dark)"><strong>${totals.total.toFixed(2)} €</strong></span></div>
-      <div class="summary-line"><strong>Paiement</strong><span>HelloAsso (en ligne)</span></div>
+      <div class="summary-line"><strong>Paiement</strong><span>${getInstallmentLabel()}</span></div>
     `;
   }
 
@@ -298,7 +414,14 @@ function updateSummary() {
       ${totals.passport > 0 ? `<div class="bank-line"><strong>Passeport sportif</strong><code>${totals.passport.toFixed(2)} €</code></div>` : ''}
       ${totals.clothingTotal > 0 ? `<div class="bank-line"><strong>Tenue club (${tshirtLabel} · ${pantalonLabel})</strong><code>${totals.clothingTotal.toFixed(2)} €</code></div>` : ''}
       <div class="bank-line" style="border-color:rgba(162,53,33,.35)"><strong>Total à régler</strong><code style="font-size:18px">${totals.total.toFixed(2)} €</code></div>
+      <div class="bank-line"><strong>Paiement</strong><code>${getInstallmentLabel()}</code></div>
+      <div class="bank-line"><strong>Échéancier</strong><code>${formatInstallmentSchedule(totals.total)}</code></div>
     `;
+  }
+
+  const installmentHelp = g('installment-help');
+  if (installmentHelp) {
+    installmentHelp.textContent = formatInstallmentSchedule(totals.total);
   }
 
   updateClothingSubtotals(totals);
@@ -436,6 +559,7 @@ function validateStep(step) {
     case 7:
       if (!val('payerFirstName')) return 'Le prénom du payeur est obligatoire.';
       if (!val('payerLastName')) return 'Le nom du payeur est obligatoire.';
+      if (![1, 2, 3].includes(getInstallmentCount())) return 'Le nombre d’échéances est invalide.';
       return null;
     default:
       return null;
@@ -551,7 +675,7 @@ async function loadConfig() {
       clubLogo: '',
       dojoAddress: 'Centre Sportif Intercommunal des Voirons, 146 rue du Châtelard, 74890 Bons en Chablais',
       schedule: ['Lundi 19h–20h30', 'Mercredi 20h30–22h30', 'Vendredi 20h30–22h30'],
-      pricing: { base: 250, family: 200, pro: 125, cseThales: 39, passport: 10, passRegionMale: 30, passRegionFemale: 60, tshirt: 25, pantalon: 10 },
+      pricing: { base: 250, family: 200, pro: 125, cseThales: 39, bureau: 0, newMemberKit: 35, passport: 25, passRegionMale: 30, passRegionFemale: 60, tshirt: 25, pantalon: 10 },
       bank: {},
       paymentProviders: { helloAssoEnabled: true },
     };
@@ -581,6 +705,7 @@ function applyBranding() {
       <div class="stat-card"><strong>${CONFIG.pricing.pro} €</strong><span>Tarif pro</span></div>
     `;
   }
+  syncBureauFormulaOption();
 }
 
 // ─── Construction du payload JSON final ──────────────────────────────────────
@@ -652,6 +777,7 @@ function buildPayload() {
       method: 'helloasso',
       payerFirstName: val('payerFirstName'),
       payerLastName: val('payerLastName'),
+      installmentCount: getInstallmentCount(),
     },
     pricing: CONFIG?.pricing || {},
   };
@@ -764,26 +890,24 @@ async function handleHelloAssoReturn() {
     }
 
     // Polling : jusqu'à 5 tentatives espacées de 2 secondes
-    let paid = false;
-    let adherentId = null;
+    let paymentData = null;
     for (let i = 0; i < 5; i++) {
       try {
         const res = await fetch(`${STATUS_URL}?registrationId=${encodeURIComponent(registrationId)}`, { cache: 'no-store' });
         const data = await res.json().catch(() => null);
         if (data?.data?.paid) {
-          paid = true;
-          adherentId = data.data.adherentId;
+          paymentData = data.data;
           break;
         }
       } catch (e) { /* continuer */ }
       if (i < 4) await new Promise(r => setTimeout(r, 2000));
     }
 
-    if (paid) {
-      showPaymentSuccess(successPanel);
+    if (paymentData?.paid) {
+      showPaymentSuccess(successPanel, paymentData);
     } else {
       // Paiement pas encore confirmé côté API — afficher message intermédiaire
-      showPaymentPending(form, successPanel, registrationId);
+      showPaymentPending(form, successPanel, registrationId, paymentData);
     }
     return true;
   }
@@ -791,14 +915,19 @@ async function handleHelloAssoReturn() {
   return false;
 }
 
-function showPaymentSuccess(panel) {
+function showPaymentSuccess(panel, paymentData = null) {
   clearDraft();
   if (!panel) return;
+  const installmentCount = Number(paymentData?.installmentCount || 1);
+  const remainingInstallments = Math.max(0, Number(paymentData?.remainingInstallments || 0));
+  const paymentDetail = installmentCount > 1 && remainingInstallments > 0
+    ? `<p>La première échéance HelloAsso a bien été confirmée. Les ${remainingInstallments} échéance(s) restantes seront prélevées automatiquement selon l'échéancier prévu.</p>`
+    : `<p>Votre inscription au club AFFBC a bien été enregistrée et votre paiement HelloAsso est confirmé.</p>`;
   panel.hidden = false;
   panel.innerHTML = `
     <div class="hero-pill">✅ Dossier validé</div>
     <h2>Paiement confirmé !</h2>
-    <p>Votre inscription au club AFFBC a bien été enregistrée et votre paiement HelloAsso est confirmé.</p>
+    ${paymentDetail}
     <p>Votre fiche adhérent a été créée dans le logiciel de gestion du club. Vous recevrez votre licence FFK une fois le dossier complet vérifié par l'équipe dirigeante.</p>
     <div class="success-note">
       📧 Le club a été notifié par email. N'hésitez pas à les contacter si vous avez des questions.
@@ -809,7 +938,7 @@ function showPaymentSuccess(panel) {
   `;
 }
 
-function showPaymentPending(form, panel, registrationId) {
+function showPaymentPending(form, panel, registrationId, paymentData = null) {
   if (form) form.hidden = true;
   if (!panel) return;
   panel.hidden = false;
@@ -843,9 +972,9 @@ window.recheckStatus = async function(registrationId) {
     const res = await fetch(`${STATUS_URL}?registrationId=${encodeURIComponent(registrationId)}`, { cache: 'no-store' });
     const data = await res.json().catch(() => null);
     if (data?.data?.paid) {
-      showPaymentSuccess(panel);
+      showPaymentSuccess(panel, data?.data || null);
     } else {
-      showPaymentPending(null, panel, registrationId);
+      showPaymentPending(null, panel, registrationId, data?.data || null);
     }
   } catch (e) {
     if (panel) panel.innerHTML = `<p class="alert">Erreur de connexion. Veuillez réessayer. Référence : ${registrationId}</p>`;
@@ -911,6 +1040,8 @@ async function init() {
   // 7. Sauvegarde du brouillon à chaque modification
   document.addEventListener('input', () => { updateConditionals(); updateSummary(); });
   document.addEventListener('change', () => { updateConditionals(); updateSummary(); });
+  document.addEventListener('input', scheduleBureauEligibilityRefresh);
+  document.addEventListener('change', scheduleBureauEligibilityRefresh);
 
   // 8. Soumission du formulaire
   const form = g('signup-form');
@@ -929,6 +1060,7 @@ async function init() {
 
   // 10. Mise à jour initiale
   updateConditionals();
+  await refreshBureauEligibility();
   updateSummary();
 }
 

@@ -1,8 +1,6 @@
 /**
  * AFFBC — Worker Cloudflare Pages : soumission du formulaire d'inscription public
  *
- * Chemin dans le repo : functions/inscription/index.js  (ou le chemin actuel du fichier)
- *
  * Ce handler :
  *   1. Valide le payload
  *   2. Uploade les pièces justificatives dans R2
@@ -113,6 +111,48 @@ function normalizeHelloAssoLastName(value, fallback = "") {
   return normalized.slice(0, 64);
 }
 
+function normalizeInstallmentCount(value) {
+  const count = Number(value || 1);
+  return count === 2 || count === 3 ? count : 1;
+}
+
+function splitAmountCents(totalCents, count) {
+  const baseAmount = Math.floor(totalCents / count);
+  let remainder = totalCents - (baseAmount * count);
+  return Array.from({ length: count }, () => {
+    const amount = baseAmount + (remainder > 0 ? 1 : 0);
+    remainder = Math.max(0, remainder - 1);
+    return amount;
+  });
+}
+
+function buildInstallmentDate(monthOffset, dayOfMonth = 5) {
+  const now = new Date();
+  const utcYear = now.getUTCFullYear();
+  const utcMonth = now.getUTCMonth();
+  const date = new Date(Date.UTC(utcYear, utcMonth + monthOffset, Math.min(dayOfMonth, 27), 12, 0, 0));
+  return date.toISOString().slice(0, 10);
+}
+
+function buildInstallmentPlan(totalCents, installmentCount) {
+  const count = normalizeInstallmentCount(installmentCount);
+  const amounts = splitAmountCents(totalCents, count);
+  const initialAmount = amounts[0];
+  const terms = amounts.slice(1).map((amount, index) => ({
+    amount,
+    date: buildInstallmentDate(index + 1),
+  }));
+  return {
+    installmentCount: count,
+    initialAmount,
+    terms,
+    schedule: amounts.map((amount, index) => ({
+      amount,
+      date: index === 0 ? null : buildInstallmentDate(index),
+    })),
+  };
+}
+
 // ─── Calcul des totaux ────────────────────────────────────────────────────────
 
 function isMinor(birthDate) {
@@ -150,6 +190,7 @@ function calculateTotals(payload) {
     family: Number(pricing.family || 200),
     pro: Number(pricing.pro || 125),
     cse_thales: Number(pricing.cseThales || 39),
+    bureau: Number(pricing.bureau || 0),
   };
 
   const baseCotisation = baseMap[formula];
@@ -170,7 +211,7 @@ function calculateTotals(payload) {
   );
 
   const newMemberKit = Number(pricing.newMemberKit || 0);
-  const passport = passportEnabled ? Number(pricing.passport || 10) : 0;
+  const passport = passportEnabled ? Number(pricing.passport || 25) : 0;
   const clothingTotal =
     tshirtQty * Number(pricing.tshirt || 25) +
     pantalonQty * Number(pricing.pantalon || 10);
@@ -187,6 +228,43 @@ function calculateTotals(payload) {
     pricingPantalon: Number(pricing.pantalon || 10),
     total: cotisation + newMemberKit + passport + clothingTotal,
   };
+}
+
+function normalizePersonName(value) {
+  return String(value || "").trim();
+}
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function hasBureauDiscipline(discipline) {
+  return String(discipline || "").toLowerCase().includes("membre du bureau");
+}
+
+async function findMatchingAdherent(db, payload) {
+  const nom = String(payload.identity?.lastName || "").trim().toUpperCase();
+  const prenom = normalizePersonName(payload.identity?.firstName);
+  const birthDate = payload.identity?.birthDate;
+  const email = normalizeEmail(payload.contact?.email);
+
+  const adherent = await db.prepare(
+    `SELECT id, nom, prenom, naissance, email, discipline FROM adherents WHERE nom = ? AND prenom = ?`,
+  )
+    .bind(nom, prenom)
+    .first();
+
+  if (!adherent) {
+    return { adherent: null, renewalVerified: false, reason: "not_found" };
+  }
+  if (adherent.naissance !== birthDate) {
+    return { adherent, renewalVerified: false, reason: "birthdate_mismatch" };
+  }
+  if (normalizeEmail(adherent.email) !== email) {
+    return { adherent, renewalVerified: false, reason: "email_mismatch" };
+  }
+
+  return { adherent, renewalVerified: true, reason: null };
 }
 
 // ─── Validation du payload ────────────────────────────────────────────────────
@@ -225,13 +303,16 @@ function validatePayload(payload) {
   if (payment.method !== "helloasso") {
     throw new Error("Mode de paiement invalide : seul HelloAsso est accepté");
   }
+  const installmentCount = normalizeInstallmentCount(payment.installmentCount);
+  if (![1, 2, 3].includes(installmentCount)) {
+    throw new Error("Le nombre d'échéances HelloAsso est invalide");
+  }
   if (payment.payerFirstName) {
     requireText(payment.payerFirstName, "Prénom du payeur");
   }
   if (payment.payerLastName) {
     requireText(payment.payerLastName, "Nom du payeur");
   }
-
   if (minor) {
     requireText(legalRep.lastName, "Nom du représentant légal");
     requireText(legalRep.firstName, "Prénom du représentant légal");
@@ -357,13 +438,26 @@ async function createHelloAssoCheckout(env, payload, totals, registrationId) {
   if (amountCents <= 0) {
     throw new Error("Le montant du dossier est nul — impossible de créer un paiement HelloAsso.");
   }
+  const installmentPlan = buildInstallmentPlan(
+    amountCents,
+    payload.payment?.installmentCount,
+  );
+  payload.payment = {
+    ...(payload.payment || {}),
+    installmentCount: installmentPlan.installmentCount,
+    schedule: installmentPlan.schedule,
+  };
 
   const token = await getHelloAssoToken(env);
 
-  const origin = env.PUBLIC_ORIGIN || "https://inscription.americanfullfightingbons.fr";
+  const origin = String(env.PUBLIC_ORIGIN || "https://inscription.americanfullfightingbons.fr").replace(/\/+$/, "");
   const firstName = String(payload.identity?.firstName || "").trim();
   const lastName = String(payload.identity?.lastName || "").trim();
+  const birthDate = String(payload.identity?.birthDate || "").trim();
   const email = String(payload.contact?.email || "").trim();
+  const address = String(payload.contact?.address1 || "").trim();
+  const city = String(payload.contact?.city || "").trim();
+  const zipCode = String(payload.contact?.postalCode || "").trim();
   const legalRep = payload.legalRepresentative || {};
   let payerFirstName = String(payload.payment?.payerFirstName || "").trim();
   let payerLastName = String(payload.payment?.payerLastName || "").trim();
@@ -376,24 +470,34 @@ async function createHelloAssoCheckout(env, payload, totals, registrationId) {
 
   const body = {
     totalAmount: amountCents,
-    initialAmount: amountCents,
+    initialAmount: installmentPlan.initialAmount,
     itemName: `Inscription AFFBC — ${firstName} ${lastName}`.trim(),
-    backUrl: `${origin}/inscription/?helloasso=cancel`,
-    errorUrl: `${origin}/inscription/?helloasso=cancel`,
-    returnUrl: `${origin}/inscription/?helloasso=success&ref=${registrationId}`,
+    backUrl: `${origin}/?helloasso=cancel`,
+    errorUrl: `${origin}/?helloasso=cancel`,
+    returnUrl: `${origin}/?helloasso=success&ref=${registrationId}`,
     containsDonation: false,
     payer: {
       firstName: payerFirstName,
       lastName: payerLastName,
       email,
+      dateOfBirth: birthDate || undefined,
+      address: address || undefined,
+      city: city || undefined,
+      zipCode: zipCode || undefined,
+      country: "FRA",
+      companyName: env.APP_NAME || "AFFBC",
     },
     metadata: {
       registrationId,
       formula: payload.practice?.formulaCode || "",
       nom: lastName,
       prenom: firstName,
+      installmentCount: installmentPlan.installmentCount,
     },
   };
+  if (installmentPlan.terms.length > 0) {
+    body.terms = installmentPlan.terms;
+  }
 
   const baseUrl = env.HELLOASSO_ENV === "sandbox" ? "https://api.helloasso-sandbox.com/v5" : "https://api.helloasso.com/v5";
   const response = await fetch(
@@ -426,6 +530,7 @@ function buildEmailHtml(payload, totals, registrationId, helloAssoUrl) {
   const identity = payload.identity || {};
   const contact = payload.contact || {};
   const practice = payload.practice || {};
+  const installmentCount = normalizeInstallmentCount(payload.payment?.installmentCount);
   const helloAssoLine = helloAssoUrl
     ? `<p><strong>🔗 Lien de paiement HelloAsso :</strong> <a href="${helloAssoUrl}">${helloAssoUrl}</a></p>`
     : "<p><em>⚠️ Lien HelloAsso non généré — vérifier la configuration.</em></p>";
@@ -446,7 +551,7 @@ function buildEmailHtml(payload, totals, registrationId, helloAssoUrl) {
     <p><strong>Formule :</strong> ${escapeMime(practice.formulaCode)}</p>
     <p><strong>Type d'inscription :</strong> ${escapeMime(practice.typeInscription)}</p>
     <p><strong>Montant total :</strong> ${totals.total.toFixed(2)} €</p>
-    <p><strong>Mode de paiement :</strong> HelloAsso (en attente de confirmation)</p>
+    <p><strong>Mode de paiement :</strong> HelloAsso (${installmentCount} fois${installmentCount === 1 ? "" : " prévues"}, en attente de confirmation)</p>
     ${helloAssoLine}
     <hr>
     <p style="color:#888;font-size:12px">
@@ -461,6 +566,7 @@ function buildEmailText(payload, totals, registrationId, helloAssoUrl) {
   const identity = payload.identity || {};
   const contact = payload.contact || {};
   const practice = payload.practice || {};
+  const installmentCount = normalizeInstallmentCount(payload.payment?.installmentCount);
   return [
     "Nouvelle inscription AFFBC",
     `Référence dossier : ${registrationId}`,
@@ -473,7 +579,7 @@ function buildEmailText(payload, totals, registrationId, helloAssoUrl) {
     `Formule : ${practice.formulaCode}`,
     `Type : ${practice.typeInscription}`,
     `Montant total : ${totals.total.toFixed(2)} €`,
-    `Mode de paiement : HelloAsso (en attente)`,
+    `Mode de paiement : HelloAsso (${installmentCount} fois${installmentCount === 1 ? "" : " prévues"}, en attente)`,
     helloAssoUrl ? `Lien HelloAsso : ${helloAssoUrl}` : "⚠️ Lien HelloAsso non généré",
   ].join("\n");
 }
@@ -483,7 +589,7 @@ async function sendSignupAlert(env, payload, totals, registrationId, helloAssoUr
     return { sent: false, reason: "brevo_api_key_missing" };
   }
   const to = env.SIGNUP_ALERT_TO || "fullfightingbons@gmail.com";
-  const from = env.SIGNUP_ALERT_FROM || "inscription@americanfullfightingbons.fr";
+  const from = env.SIGNUP_ALERT_FROM || "contact@americanfullfightingbons.fr";
   const identity = payload.identity || {};
   const subject = `Nouvelle inscription AFFBC — ${escapeMime(identity.lastName)} ${escapeMime(identity.firstName)}`.trim();
 
@@ -543,30 +649,45 @@ export async function onRequestPost(context) {
     const validation = validatePayload(payload);
 
     // ── Vérification renouvellement ──────────────────────────────────────────
+    let matchingAdherent = null;
     if (payload.practice.typeInscription === "renouvellement") {
-      const nom = String(payload.identity.lastName || "").trim().toUpperCase();
-      const prenom = String(payload.identity.firstName || "").trim();
-      const birthDate = payload.identity.birthDate;
-      const email = payload.contact.email?.toLowerCase().trim();
+      const renewalCheck = await findMatchingAdherent(context.env.DB, payload);
+      matchingAdherent = renewalCheck.adherent;
 
-      const adherent = await context.env.DB.prepare(
-        `SELECT nom, prenom, naissance, email FROM adherents WHERE nom = ? AND prenom = ?`,
-      )
-        .bind(nom, prenom)
-        .first();
-
-      if (!adherent) {
+      if (!renewalCheck.adherent) {
         return badRequest(
           "Nom et prénom non trouvés dans la base d'adhérents pour un renouvellement de licence",
         );
       }
-      if (adherent.naissance !== birthDate) {
+      if (renewalCheck.reason === "birthdate_mismatch") {
         return badRequest(
           "La date de naissance ne correspond pas à celle enregistrée pour cet adhérent",
         );
       }
-      if (adherent.email !== email) {
+      if (renewalCheck.reason === "email_mismatch") {
         return badRequest("L'email ne correspond pas à celui enregistré pour cet adhérent");
+      }
+    }
+
+    if (payload.practice.formulaCode === "bureau") {
+      if (payload.practice.typeInscription !== "renouvellement") {
+        return badRequest(
+          "Le tarif Membres du Bureau est réservé aux renouvellements correspondant à un adhérent existant",
+        );
+      }
+      if (!matchingAdherent) {
+        const renewalCheck = await findMatchingAdherent(context.env.DB, payload);
+        matchingAdherent = renewalCheck.adherent;
+        if (!renewalCheck.renewalVerified) {
+          return badRequest(
+            "Impossible de vérifier l'adhérent pour appliquer le tarif Membres du Bureau",
+          );
+        }
+      }
+      if (!hasBureauDiscipline(matchingAdherent.discipline)) {
+        return badRequest(
+          "Le tarif Membres du Bureau n'est autorisé que pour les adhérents dont la discipline contient \"membre du bureau\"",
+        );
       }
     }
 

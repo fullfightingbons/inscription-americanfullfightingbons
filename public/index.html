@@ -14,7 +14,7 @@
   <div class="signup-shell">
     <header class="signup-hero">
       <div class="hero-brand">
-        <img id="club-logo" class="hero-logo" src="/cloudflare/export/assets/storage/Logo_1_nnoir_copie-removebg-preview.png" alt="Logo du club">
+        <img id="club-logo" class="hero-logo" src="/assets/Logo_1_nnoir_copie-removebg-preview.png" alt="Logo du club">
         <div>
           <div class="hero-kicker">Saison sportive</div>
           <h1 id="club-name">American Full Fighting</h1>
@@ -289,6 +289,7 @@
                   <option value="pro">Tarif pro</option>
                   <option value="cse_thales">Tarif CSE Thalès</option>
                 </select>
+                <small id="bureau-member-note">L'option Membres du Bureau apparaît automatiquement pour les renouvellements reconnus avec cette discipline dans le logiciel de gestion.</small>
               </label>
               <label class="field">
                 <span>Passeport sportif <small style="font-weight:normal;color:var(--muted)">(obligatoire pour les compétitions et passage de ceinture noire)</small></span>
@@ -575,10 +576,19 @@
                 <span>Nom du payeur</span>
                 <input id="payerLastName" autocomplete="family-name" required>
               </label>
+              <label class="field">
+                <span>Règlement HelloAsso</span>
+                <select id="installmentCount" required>
+                  <option value="1">Paiement en 1 fois</option>
+                  <option value="2">Paiement en 2 fois</option>
+                  <option value="3">Paiement en 3 fois</option>
+                </select>
+                <small id="installment-help">Les échéances suivantes seront prélevées automatiquement les mois prochains via HelloAsso.</small>
+              </label>
             </div>
             <div class="panel-actions">
               <button type="button" class="btn" data-prev>Retour</button>
-              <button type="submit" class="btn primary" id="submit-button">Envoyer l'inscription</button>
+              <button type="submit" class="btn primary" id="submit-button">Valider et payer</button>
             </div>
           </div>
         </form>

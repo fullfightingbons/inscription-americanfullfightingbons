@@ -1,10 +1,7 @@
 /**
  * AFFBC — Worker Cloudflare Pages : vérification du statut de paiement HelloAsso
  *
- * Chemin dans le repo : functions/inscription/helloasso/status.js
- *   (même dossier que create-intent.js)
- *
- * GET /inscription/helloasso/status?registrationId=xxx
+ * GET /api/public/payment/helloasso/status?registrationId=xxx
  *
  * Ce handler :
  *   1. Récupère l'inscription dans `inscriptions_publiques`
@@ -53,6 +50,231 @@ function getActiveExerciseDate(endDate) {
   return `${year}-07-31`;
 }
 
+function toAmountCents(value) {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  return Number.isInteger(amount) ? amount : Math.round(amount * 100);
+}
+
+function buildPaymentSnapshot(order, dossier, checkoutIntentId) {
+  const installmentCount = Math.max(1, Math.min(3, Number(dossier?.payment?.installmentCount || 1)));
+  const totalAmountCents = toAmountCents(dossier?.computedTotals?.total || 0);
+  const payments = Array.isArray(order?.payments) ? order.payments.filter(Boolean) : [];
+  const paidAmountCents = payments.reduce((sum, payment) => sum + toAmountCents(payment?.amount), 0);
+  const paidInstallments = Math.min(
+    installmentCount,
+    payments.filter((payment) => toAmountCents(payment?.amount) > 0).length,
+  );
+  const hasInitialPayment = Boolean(order?.id) && paidInstallments > 0;
+  const fullyPaid = installmentCount === 1
+    ? hasInitialPayment
+    : paidInstallments >= installmentCount || (totalAmountCents > 0 && paidAmountCents >= totalAmountCents);
+  return {
+    status: fullyPaid ? "payee" : "paiement_planifie",
+    hasInitialPayment,
+    fullyPaid,
+    installmentCount,
+    paidInstallments,
+    remainingInstallments: Math.max(0, installmentCount - paidInstallments),
+    paidAmountCents,
+    remainingAmountCents: Math.max(0, totalAmountCents - paidAmountCents),
+    reference: String(order?.payments?.[0]?.cashOutState || order?.id || checkoutIntentId),
+  };
+}
+
+function normalizeCheckoutIntentId(value) {
+  return String(value || "").trim().replace(/\.0+$/, "");
+}
+
+function pdfSafe(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7E]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function pdfEscape(value) {
+  return pdfSafe(value)
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)");
+}
+
+function wrapPdfText(text, maxLength = 92) {
+  const clean = pdfSafe(text);
+  if (!clean) return [""];
+  const words = clean.split(" ");
+  const lines = [];
+  let current = "";
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length <= maxLength) {
+      current = candidate;
+      continue;
+    }
+    if (current) lines.push(current);
+    current = word;
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
+function buildRegistrationPdfLines(registration, dossier, adherentId) {
+  const identity = dossier.identity || {};
+  const contact = dossier.contact || {};
+  const emergency = dossier.emergency || {};
+  const legalRep = dossier.legalRepresentative || {};
+  const practice = dossier.practice || {};
+  const health = dossier.health || {};
+  const clothing = dossier.clothingOrder || {};
+  const consents = dossier.consents || {};
+  const payment = dossier.payment || {};
+  const totals = dossier.computedTotals || {};
+  const qsSport = health.qsSport || {};
+
+  const lines = [
+    "AFFBC - DOSSIER D INSCRIPTION",
+    `Reference inscription : ${registration.id}`,
+    `Date de validation : ${new Date().toISOString().slice(0, 10)}`,
+    `Adherent ID : ${adherentId || ""}`,
+    "",
+    "IDENTITE",
+    `Nom : ${identity.lastName || ""}`,
+    `Prenom : ${identity.firstName || ""}`,
+    `Date de naissance : ${identity.birthDate || ""}`,
+    `Lieu de naissance : ${identity.birthPlace || ""}`,
+    "",
+    "COORDONNEES",
+    `Adresse : ${contact.address1 || ""}`,
+    `Complement : ${contact.address2 || ""}`,
+    `Code postal : ${contact.postalCode || ""}`,
+    `Ville : ${contact.city || ""}`,
+    `Telephone principal : ${contact.phonePrimary || ""}`,
+    `Telephone secondaire : ${contact.phoneSecondary || ""}`,
+    `Email : ${contact.email || ""}`,
+    "",
+    "URGENCE",
+    `Nom : ${emergency.lastName || ""}`,
+    `Prenom : ${emergency.firstName || ""}`,
+    `Telephone principal : ${emergency.phonePrimary || ""}`,
+    `Telephone secondaire : ${emergency.phoneSecondary || ""}`,
+    "",
+    "PRATIQUE",
+    `Type d inscription : ${practice.typeInscription || ""}`,
+    `Type de pratique : ${practice.practiceType || ""}`,
+    `Formule : ${practice.formulaCode || ""}`,
+    `Passeport sportif : ${practice.passportEnabled ? "Oui" : "Non"}`,
+    `Pass Region : ${practice.passRegionEnabled ? "Oui" : "Non"}`,
+    `Montant Pass Region : ${Number(practice.passRegionAmount || 0).toFixed(2)} EUR`,
+    `Code Pass Region : ${practice.passRegionCode || ""}`,
+    "",
+    "QUESTIONNAIRE SANTE",
+    `familyCardiacDeath : ${qsSport.familyCardiacDeath || ""}`,
+    `chestPain : ${qsSport.chestPain || ""}`,
+    `wheezing : ${qsSport.wheezing || ""}`,
+    `fainting : ${qsSport.fainting || ""}`,
+    `sportStop : ${qsSport.sportStop || ""}`,
+    `longTermTreatment : ${qsSport.longTermTreatment || ""}`,
+    `bonePain : ${qsSport.bonePain || ""}`,
+    `practiceInterrupted : ${qsSport.practiceInterrupted || ""}`,
+    `medicalAdviceNeeded : ${qsSport.medicalAdviceNeeded || ""}`,
+    "",
+    "TENUE",
+    `T-shirt quantite : ${clothing.tshirtQty || 0}`,
+    `T-shirt taille : ${clothing.tshirtSize || ""}`,
+    `Pantalon quantite : ${clothing.pantalonQty || 0}`,
+    `Pantalon taille : ${clothing.pantalonSize || ""}`,
+    "",
+    "ENGAGEMENTS",
+    `Reglement accepte : ${consents.rulesAccepted ? "Oui" : "Non"}`,
+    `Assurance acknowledgee : ${consents.insuranceAcknowledged ? "Oui" : "Non"}`,
+    `Droit a l image : ${consents.imageRights || ""}`,
+    `Signe le : ${consents.signedAt || ""}`,
+    `Signature pratiquant : ${consents.applicantSignatureName || ""}`,
+    "",
+    "PAYEUR",
+    `Prenom du payeur : ${payment.payerFirstName || ""}`,
+    `Nom du payeur : ${payment.payerLastName || ""}`,
+    `Mode : HelloAsso`,
+    "",
+    "REPRESENTANT LEGAL",
+    `Nom : ${legalRep.lastName || ""}`,
+    `Prenom : ${legalRep.firstName || ""}`,
+    `Qualite : ${legalRep.role || ""}`,
+    `Ville : ${legalRep.city || ""}`,
+    `Date signature : ${legalRep.signedAt || ""}`,
+    `Signature : ${legalRep.signatureName || ""}`,
+    "",
+    "TOTAUX",
+    `Cotisation : ${Number(totals.cotisation || 0).toFixed(2)} EUR`,
+    `Pass Region : ${Number(totals.passRegionAmount || 0).toFixed(2)} EUR`,
+    `Nouvel adherent tenue : ${Number(totals.newMemberKit || 0).toFixed(2)} EUR`,
+    `Passeport : ${Number(totals.passport || 0).toFixed(2)} EUR`,
+    `Tenue : ${Number(totals.clothingTotal || 0).toFixed(2)} EUR`,
+    `Montant total : ${Number(registration.montant_total || totals.total || 0).toFixed(2)} EUR`,
+  ];
+
+  return lines.flatMap((line) => wrapPdfText(line));
+}
+
+function buildPdfFromLines(lines) {
+  const pageWidth = 595;
+  const pageHeight = 842;
+  const marginLeft = 40;
+  const marginTop = 48;
+  const lineHeight = 14;
+  const maxLinesPerPage = 52;
+  const pages = [];
+
+  for (let index = 0; index < lines.length; index += maxLinesPerPage) {
+    pages.push(lines.slice(index, index + maxLinesPerPage));
+  }
+
+  const objects = [];
+  objects.push("1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj");
+  const kids = pages.map((_, index) => `${3 + index * 2} 0 R`).join(" ");
+  objects.push(`2 0 obj << /Type /Pages /Count ${pages.length} /Kids [${kids}] >> endobj`);
+
+  pages.forEach((pageLines, pageIndex) => {
+    const pageObjectId = 3 + pageIndex * 2;
+    const contentObjectId = pageObjectId + 1;
+    const textCommands = [
+      "BT",
+      "/F1 11 Tf",
+    ];
+    pageLines.forEach((line, lineIndex) => {
+      const y = pageHeight - marginTop - (lineIndex * lineHeight);
+      textCommands.push(`1 0 0 1 ${marginLeft} ${y} Tm (${pdfEscape(line)}) Tj`);
+    });
+    textCommands.push("ET");
+    const stream = textCommands.join("\n");
+    objects.push(
+      `${pageObjectId} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 ${3 + pages.length * 2} 0 R >> >> /Contents ${contentObjectId} 0 R >> endobj`,
+    );
+    objects.push(`${contentObjectId} 0 obj << /Length ${stream.length} >> stream\n${stream}\nendstream\nendobj`);
+  });
+
+  const fontObjectId = 3 + pages.length * 2;
+  objects.push(`${fontObjectId} 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj`);
+
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  for (const object of objects) {
+    offsets.push(pdf.length);
+    pdf += `${object}\n`;
+  }
+  const xrefStart = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n`;
+  pdf += "0000000000 65535 f \n";
+  for (let index = 1; index < offsets.length; index += 1) {
+    pdf += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+  }
+  pdf += `trailer << /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+  return pdf;
+}
+
 async function findActiveExercise(db) {
   const active = await db
     .prepare(`SELECT * FROM exercices WHERE statut = 'actif' ORDER BY date_debut DESC LIMIT 1`)
@@ -63,11 +285,33 @@ async function findActiveExercise(db) {
     .first();
 }
 
+async function findMatchingAdherent(db, payload) {
+  const identity = payload?.identity || {};
+  const contact = payload?.contact || {};
+  const nom = String(identity.lastName || "").trim().toUpperCase();
+  const prenom = String(identity.firstName || "").trim();
+  const birthDate = String(identity.birthDate || "").trim();
+  const email = String(contact.email || "").trim().toLowerCase();
+  if (!nom || !prenom || !birthDate || !email) return null;
+  const matches = await db
+    .prepare(
+      `SELECT *
+       FROM adherents
+       WHERE nom = ? AND prenom = ? AND naissance = ? AND lower(email) = lower(?)
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT 1`,
+    )
+    .bind(nom, prenom, birthDate, email)
+    .all();
+  return matches?.results?.[0] || null;
+}
+
 // ─── Création de la fiche adhérent ───────────────────────────────────────────
 
-async function insertAdherent(db, payload, totals, exercise) {
+async function upsertAdherent(db, payload, totals, exercise) {
   const now = new Date().toISOString();
-  const adherentId = crypto.randomUUID();
+  const existing = await findMatchingAdherent(db, payload);
+  const adherentId = existing?.id ? String(existing.id) : crypto.randomUUID();
 
   const identity = payload.identity || {};
   const contact = payload.contact || {};
@@ -105,7 +349,7 @@ async function insertAdherent(db, payload, totals, exercise) {
     adresse: [contact.address1 || "", contact.address2 || ""].filter(Boolean).join(", "),
     code_postal: String(contact.postalCode || "").trim(),
     ville: String(contact.city || "").trim(),
-    discipline: "Club",
+    discipline: existing?.discipline || (String(practice.formulaCode || "") === "bureau" ? "Membre du Bureau" : "Club"),
     droit_image: (payload.consents?.imageRights === "yes") ? 1 : 0,
     certificat: totals.certificateRequired ? 0 : 1,
     pass_region: practice.passRegionEnabled ? 1 : 0,
@@ -126,21 +370,29 @@ async function insertAdherent(db, payload, totals, exercise) {
     pdf_uploaded_at: null,
     source_logiciel: "inscription-web",
     exercice_id: exercise?.id || null,
-    created_at: now,
+    created_at: existing?.created_at || now,
     updated_at: now,
-    couleur_ceinture: "",
-    numero_licence: "",
+    couleur_ceinture: existing?.couleur_ceinture || "",
+    numero_licence: existing?.numero_licence || "",
   };
 
   const columns = Object.keys(row);
-  await db
-    .prepare(
-      `INSERT INTO adherents (${columns.map((c) => `"${c}"`).join(", ")}) VALUES (${columns
-        .map(() => "?")
-        .join(", ")})`,
-    )
-    .bind(...columns.map((c) => row[c]))
-    .run();
+  if (existing?.id) {
+    const assignments = columns.filter((column) => column !== "id").map((column) => `"${column}" = ?`).join(", ");
+    await db
+      .prepare(`UPDATE adherents SET ${assignments} WHERE id = ?`)
+      .bind(...columns.filter((column) => column !== "id").map((column) => row[column]), adherentId)
+      .run();
+  } else {
+    await db
+      .prepare(
+        `INSERT INTO adherents (${columns.map((c) => `"${c}"`).join(", ")}) VALUES (${columns
+          .map(() => "?")
+          .join(", ")})`,
+      )
+      .bind(...columns.map((c) => row[c]))
+      .run();
+  }
 
   return adherentId;
 }
@@ -154,22 +406,26 @@ async function insertAdherent(db, payload, totals, exercise) {
 // `lignes` est un tableau JSON : [{ desc, qte, pu }]
 
 async function nextFactureNumero(db, exercice_id) {
-  // Compte les factures existantes pour générer un numéro séquentiel
   const year = new Date().getFullYear();
-  const result = await db
-    .prepare(`SELECT COUNT(*) as cnt FROM factures WHERE exercice_id = ?`)
-    .bind(exercice_id)
-    .first();
+  const result = await db.prepare(`SELECT COUNT(*) as cnt FROM factures WHERE exercice_id = ?`).bind(exercice_id).first();
   const n = (result?.cnt || 0) + 1;
-  return `VTE-${year}-${String(n).padStart(3, "0")}`;
+  const ts = Date.now().toString(36).slice(-4).toUpperCase(); // suffixe anti-collision
+  return `VTE-${year}-${String(n).padStart(3, "0")}-${ts}`;
 }
 
-async function insertInscriptionSales(db, adherentId, nom, prenom, adresse, totals, exercise) {
+async function insertInscriptionSales(db, registrationId, adherentId, nom, prenom, adresse, totals, exercise) {
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
   const numero = await nextFactureNumero(db, exercise?.id);
 
   const lignes = [];
+  if (Number(totals.newMemberKit || 0) > 0) {
+    lignes.push({
+      desc: "Supplément tenue nouvel adhérent",
+      qte: 1,
+      pu: Number(totals.newMemberKit || 0),
+    });
+  }
   if (Number(totals.passport || 0) > 0) {
     lignes.push({
       desc: "Passeport sportif",
@@ -203,7 +459,7 @@ async function insertInscriptionSales(db, adherentId, nom, prenom, adresse, tota
     objet: "Ventes liées à l'inscription web",
     lignes: JSON.stringify(lignes),
     statut: "Payée", // paiement HelloAsso déjà confirmé
-    notes: `Vente générée automatiquement lors de l'inscription web. Paiement HelloAsso validé. Adhérent ID : ${adherentId}`,
+    notes: `Vente générée automatiquement lors de l'inscription web. Paiement HelloAsso validé. Registration ID : ${registrationId}. Adhérent ID : ${adherentId}`,
     exercice_id: exercise?.id || null,
     created_at: now,
     updated_at: now,
@@ -234,6 +490,141 @@ async function insertJournalEntryPair(db, entries) {
       .bind(...columns.map((c) => entry[c]))
       .run();
   }
+}
+
+async function findHelloAssoBankAccountId(db) {
+  const configRows = await db
+    .prepare(
+      `SELECT cle, valeur
+       FROM club_info
+       WHERE cle IN ('helloasso_bank_account_id', 'public_inscription_bank_account_id', 'default_bank_account_id')`,
+    )
+    .all();
+  const preferredId = (configRows?.results || []).map((row) => String(row?.valeur || "").trim()).find(Boolean);
+  if (preferredId) {
+    const preferred = await db
+      .prepare(`SELECT id FROM comptes_bancaires WHERE id = ? LIMIT 1`)
+      .bind(preferredId)
+      .first();
+    if (preferred?.id) return String(preferred.id);
+  }
+  const fallback = await db
+    .prepare(`SELECT id FROM comptes_bancaires ORDER BY created_at ASC, nom ASC LIMIT 1`)
+    .first();
+  return fallback?.id ? String(fallback.id) : null;
+}
+
+async function upsertJournalEntryByPiece(db, entry) {
+  const existing = await db
+    .prepare(`SELECT id FROM journal_comptable WHERE piece = ? LIMIT 1`)
+    .bind(entry.piece)
+    .first();
+  const columns = Object.keys(entry);
+  if (existing?.id) {
+    const assignments = columns.map((column) => `"${column}" = ?`).join(", ");
+    await db
+      .prepare(`UPDATE journal_comptable SET ${assignments} WHERE id = ?`)
+      .bind(...columns.map((column) => entry[column]), existing.id)
+      .run();
+    return String(existing.id);
+  }
+  await db
+    .prepare(
+      `INSERT INTO journal_comptable (${columns.map((column) => `"${column}"`).join(", ")})
+       VALUES (${columns.map(() => "?").join(", ")})`,
+    )
+    .bind(...columns.map((column) => entry[column]))
+    .run();
+  return String(entry.id);
+}
+
+async function upsertHelloAssoPaymentJournal(db, registrationId, adherentId, nom, prenom, paidAmount, exercise, paidAt) {
+  if (!(paidAmount > 0)) return null;
+  const now = new Date().toISOString();
+  const dateOp = String(paidAt || now).slice(0, 10);
+  const pieceBase = `PAY-${String(registrationId).slice(0, 8).toUpperCase()}`;
+  const labelName = `${nom} ${prenom}`.trim();
+  const common = {
+    date_op: dateOp,
+    source_type: "inscription_publique",
+    source_id: registrationId,
+    source_logiciel: "inscription-web",
+    exercice_id: exercise?.id || null,
+    updated_at: now,
+  };
+
+  await upsertJournalEntryByPiece(db, {
+    id: crypto.randomUUID(),
+    ...common,
+    piece: `${pieceBase}-BNQ`,
+    compte: "512 - Banque",
+    libelle: `Encaissement HelloAsso - ${labelName}`,
+    debit: paidAmount,
+    credit: 0,
+    created_at: now,
+  });
+  await upsertJournalEntryByPiece(db, {
+    id: crypto.randomUUID(),
+    ...common,
+    piece: `${pieceBase}-CLI`,
+    compte: "411 - Adhérents et clients",
+    libelle: `Règlement HelloAsso - ${labelName}`,
+    debit: 0,
+    credit: paidAmount,
+    created_at: now,
+  });
+
+  return pieceBase;
+}
+
+async function upsertHelloAssoBankTransaction(db, registrationId, nom, prenom, paidAmount, paidAt, piece) {
+  if (!(paidAmount > 0)) return null;
+  const compteId = await findHelloAssoBankAccountId(db);
+  if (!compteId) return null;
+  const now = new Date().toISOString();
+  const dateOp = String(paidAt || now).slice(0, 10);
+  const sourceDocument = `helloasso:${registrationId}`;
+  const libelle = `Encaissement HelloAsso - ${`${nom} ${prenom}`.trim()}`;
+  const row = {
+    compte_id: compteId,
+    date_op: dateOp,
+    date_valeur: dateOp,
+    libelle,
+    debit: 0,
+    credit: paidAmount,
+    rapproche: 1,
+    ecriture_piece: piece || null,
+    source_document: sourceDocument,
+    source_format: "helloasso",
+    updated_at: now,
+  };
+  const existing = await db
+    .prepare(`SELECT id FROM transactions WHERE source_document = ? LIMIT 1`)
+    .bind(sourceDocument)
+    .first();
+  const columns = Object.keys(row);
+  if (existing?.id) {
+    const assignments = columns.map((column) => `"${column}" = ?`).join(", ");
+    await db
+      .prepare(`UPDATE transactions SET ${assignments} WHERE id = ?`)
+      .bind(...columns.map((column) => row[column]), existing.id)
+      .run();
+    return String(existing.id);
+  }
+  const insertRow = {
+    id: crypto.randomUUID(),
+    ...row,
+    created_at: now,
+  };
+  const insertColumns = Object.keys(insertRow);
+  await db
+    .prepare(
+      `INSERT INTO transactions (${insertColumns.map((column) => `"${column}"`).join(", ")})
+       VALUES (${insertColumns.map(() => "?").join(", ")})`,
+    )
+    .bind(...insertColumns.map((column) => insertRow[column]))
+    .run();
+  return insertRow.id;
 }
 
 async function insertCotisationJournal(db, adherentId, nom, prenom, totals, exercise, paidAt) {
@@ -277,8 +668,9 @@ async function insertCotisationJournal(db, adherentId, nom, prenom, totals, exer
 
 async function insertVenteTenueJournal(db, factureId, nom, prenom, totals, exercise, paidAt) {
   const clothingTotal = Number(totals.clothingTotal || 0);
+  const newMemberKitTotal = Number(totals.newMemberKit || 0);
   const passportTotal = Number(totals.passport || 0);
-  const totalSales = clothingTotal + passportTotal;
+  const totalSales = clothingTotal + newMemberKitTotal + passportTotal;
   if (!factureId || !totalSales) return null;
   const now = new Date().toISOString();
   const dateOp = String(paidAt || now).slice(0, 10);
@@ -311,14 +703,14 @@ async function insertVenteTenueJournal(db, factureId, nom, prenom, totals, exerc
       credit: 0,
     },
   ];
-  if (clothingTotal > 0) {
+  if (clothingTotal > 0 || newMemberKitTotal > 0) {
     entries.push({
       id: crypto.randomUUID(),
       ...common,
       compte: "707 - Ventes vêtements et équipements",
       libelle: `${libelleBase} - Vente de Tenue`,
       debit: 0,
-      credit: clothingTotal,
+      credit: clothingTotal + newMemberKitTotal,
     });
   }
   if (passportTotal > 0) {
@@ -381,10 +773,20 @@ async function insertPassRegionJournal(db, adherentId, nom, prenom, totals, exer
 
 async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId) {
   if (!env.BREVO_API_KEY) return;
-  const to = env.SIGNUP_ALERT_TO || "fullfightingbons@gmail.com";
-  const from = env.SIGNUP_ALERT_FROM || "inscription@americanfullfightingbons.fr";
+  const clubRecipient = env.SIGNUP_ALERT_TO || "fullfightingbons@gmail.com";
+  const registrantRecipient = String(registration.email || "").trim().toLowerCase();
+  const from = env.SIGNUP_ALERT_FROM || "contact@americanfullfightingbons.fr";
   const nom = registration.nom || "";
   const prenom = registration.prenom || "";
+  const recipients = [
+    { email: clubRecipient, name: env.SIGNUP_ALERT_TO_NAME || "AFFBC" },
+    registrantRecipient
+      ? { email: registrantRecipient, name: `${prenom} ${nom}`.trim() || registrantRecipient }
+      : null,
+  ].filter((entry, index, array) => entry && array.findIndex((item) => item?.email === entry.email) === index);
+  const pdfLines = buildRegistrationPdfLines(registration, dossier, adherentId);
+  const pdfContent = btoa(buildPdfFromLines(pdfLines));
+  const fileName = `inscription-affbc-${String(registration.id || "").slice(0, 8)}.pdf`;
 
   await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
@@ -398,7 +800,7 @@ async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId)
         name: env.SIGNUP_ALERT_SENDER_NAME || "AFFBC Inscriptions",
         email: from,
       },
-      to: [{ email: to, name: env.SIGNUP_ALERT_TO_NAME || "AFFBC" }],
+      to: recipients,
       subject: `✅ Paiement confirmé — ${nom} ${prenom}`,
       htmlContent: `
         <html><body style="font-family:Arial,sans-serif">
@@ -408,6 +810,7 @@ async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId)
           <p><strong>Montant :</strong> ${Number(registration.montant_total || 0).toFixed(2)} €</p>
           <p><strong>Référence inscription :</strong> ${registration.id}</p>
           <p><strong>Fiche adhérent créée (ID) :</strong> ${adherentId}</p>
+          <p><strong>Pièce jointe :</strong> le dossier PDF récapitulatif est joint à cet email.</p>
           <p style="color:#888;font-size:12px">
             La fiche adhérent est maintenant visible dans le logiciel de gestion,
             onglet <strong>Adhérents</strong>. Si une tenue a été commandée,
@@ -421,9 +824,43 @@ async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId)
         `Montant : ${Number(registration.montant_total || 0).toFixed(2)} €`,
         `Référence : ${registration.id}`,
         `Fiche adhérent ID : ${adherentId}`,
+        `PDF joint : ${fileName}`,
       ].join("\n"),
+      attachment: [
+        {
+          name: fileName,
+          content: pdfContent,
+        },
+      ],
     }),
   }).catch(() => {}); // non bloquant
+}
+
+async function storeRegistrationPdf(env, registration, dossier, adherentId) {
+  try {
+    const pdfLines = buildRegistrationPdfLines(registration, dossier, adherentId);
+    const pdfContent = buildPdfFromLines(pdfLines);
+    const fileName = `inscription-affbc-${String(registration.id || '').slice(0, 8)}.pdf`;
+    const r2Key = `adherents/${adherentId}/inscription-${String(registration.id).slice(0, 8)}.pdf`;
+
+    const bucket = env.R2_PDF || env.R2_STORAGE;
+    if (!bucket) return null;
+
+    // Convertir la string PDF en Uint8Array via latin-1 pour préserver les bytes binaires
+    const pdfBytes = new Uint8Array(pdfContent.length);
+    for (let i = 0; i < pdfContent.length; i++) {
+      pdfBytes[i] = pdfContent.charCodeAt(i) & 0xff;
+    }
+
+    await bucket.put(r2Key, pdfBytes, {
+      httpMetadata: { contentType: 'application/pdf' },
+      customMetadata: { registrationId: registration.id, adherentId },
+    });
+
+    return { key: r2Key, fileName };
+  } catch (e) {
+    return null; // non bloquant
+  }
 }
 
 // ─── Handler GET ──────────────────────────────────────────────────────────────
@@ -445,23 +882,12 @@ export async function onRequestGet(context) {
     const dossier = parseDossierJson(registration);
     const totals = dossier.computedTotals || {};
 
-    // ── Si déjà traitée, retourner directement ────────────────────────────────
-    if (registration.statut === "payee" && registration.adherent_id) {
-      return json({
-        data: {
-          paid: true,
-          alreadyProcessed: true,
-          registrationId,
-          adherentId: registration.adherent_id,
-        },
-        error: null,
-      });
-    }
-
     // ── Vérification de l'état HelloAsso ─────────────────────────────────────
     const checkoutIntentId =
-      registration.helloasso_checkout_intent_id ||
-      dossier.payment?.helloAssoCheckoutIntentId;
+      normalizeCheckoutIntentId(
+        registration.helloasso_checkout_intent_id ||
+        dossier.payment?.helloAssoCheckoutIntentId,
+      );
 
     if (!checkoutIntentId) {
       return badRequest("Checkout HelloAsso introuvable pour cette inscription");
@@ -475,7 +901,9 @@ export async function onRequestGet(context) {
     );
 
     const order = intent.order || null;
-    const paid = Boolean(order?.id);
+    const paymentSnapshot = buildPaymentSnapshot(order, dossier, checkoutIntentId);
+    const paid = paymentSnapshot.hasInitialPayment;
+    const paidAmount = Number(paymentSnapshot.paidAmountCents || 0) / 100;
     const paidAt =
       order?.date ||
       order?.payments?.[0]?.date ||
@@ -487,8 +915,71 @@ export async function onRequestGet(context) {
       return json({
         data: {
           paid: false,
+          fullyPaid: false,
           registrationId,
           adherentId: null,
+          installmentCount: paymentSnapshot.installmentCount,
+          paidInstallments: paymentSnapshot.paidInstallments,
+          remainingInstallments: paymentSnapshot.remainingInstallments,
+        },
+        error: null,
+      });
+    }
+
+    if (registration.adherent_id) {
+      const exercise =
+        (registration.exercice_id
+          ? await context.env.DB.prepare(`SELECT * FROM exercices WHERE id = ? LIMIT 1`).bind(registration.exercice_id).first()
+          : null) || await findActiveExercise(context.env.DB);
+      const paymentPiece = await upsertHelloAssoPaymentJournal(
+        context.env.DB,
+        registrationId,
+        registration.adherent_id,
+        registration.nom,
+        registration.prenom,
+        paidAmount,
+        exercise,
+        paidAt,
+      );
+      await upsertHelloAssoBankTransaction(
+        context.env.DB,
+        registrationId,
+        registration.nom,
+        registration.prenom,
+        paidAmount,
+        paidAt,
+        paymentPiece,
+      );
+      await updateRegistrationPayment(context.env.DB, registrationId, {
+        status: paymentSnapshot.status,
+        method: "helloasso",
+        reference: paymentSnapshot.reference,
+        payment: {
+          method: "helloasso",
+          helloAssoCheckoutIntentId: checkoutIntentId,
+          helloAssoOrderId: order?.id || null,
+          helloAssoOrder: order,
+          helloAssoState: paymentSnapshot.fullyPaid ? "paid" : "scheduled",
+          paidAt: paymentSnapshot.hasInitialPayment ? paidAt : null,
+          installmentCount: paymentSnapshot.installmentCount,
+          paidInstallments: paymentSnapshot.paidInstallments,
+          remainingInstallments: paymentSnapshot.remainingInstallments,
+          paidAmountCents: paymentSnapshot.paidAmountCents,
+          remainingAmountCents: paymentSnapshot.remainingAmountCents,
+        },
+      });
+
+      return json({
+        data: {
+          paid: true,
+          fullyPaid: paymentSnapshot.fullyPaid,
+          alreadyProcessed: true,
+          registrationId,
+          adherentId: registration.adherent_id,
+          orderId: order?.id || null,
+          installmentCount: paymentSnapshot.installmentCount,
+          paidInstallments: paymentSnapshot.paidInstallments,
+          remainingInstallments: paymentSnapshot.remainingInstallments,
         },
         error: null,
       });
@@ -496,7 +987,7 @@ export async function onRequestGet(context) {
 
     // ── Paiement confirmé : création de la fiche adhérent ────────────────────
     const exercise = await findActiveExercise(context.env.DB);
-    const adherentId = await insertAdherent(
+    const adherentId = await upsertAdherent(
       context.env.DB,
       dossier,
       totals,
@@ -505,7 +996,7 @@ export async function onRequestGet(context) {
 
     // ── Création de la vente tenue (si commande) ──────────────────────────────
     let factureId = null;
-    const hasSales = Number(totals.passport || 0) > 0 || (totals.tshirtQty > 0) || (totals.pantalonQty > 0);
+    const hasSales = Number(totals.passport || 0) > 0 || Number(totals.newMemberKit || 0) > 0 || (totals.tshirtQty > 0) || (totals.pantalonQty > 0);
     if (hasSales) {
       const contact = dossier.contact || {};
       const adresse = [contact.address1, contact.address2, contact.postalCode, contact.city]
@@ -513,6 +1004,7 @@ export async function onRequestGet(context) {
         .join(", ");
       factureId = await insertInscriptionSales(
         context.env.DB,
+        registrationId,
         adherentId,
         registration.nom,
         registration.prenom,
@@ -542,6 +1034,26 @@ export async function onRequestGet(context) {
       paidAt,
     );
 
+    const paymentPiece = await upsertHelloAssoPaymentJournal(
+      context.env.DB,
+      registrationId,
+      adherentId,
+      registration.nom,
+      registration.prenom,
+      paidAmount,
+      exercise,
+      paidAt,
+    );
+    await upsertHelloAssoBankTransaction(
+      context.env.DB,
+      registrationId,
+      registration.nom,
+      registration.prenom,
+      paidAmount,
+      paidAt,
+      paymentPiece,
+    );
+
     if (factureId) {
       await insertVenteTenueJournal(
         context.env.DB,
@@ -556,16 +1068,21 @@ export async function onRequestGet(context) {
 
     // ── Mise à jour de l'inscription ──────────────────────────────────────────
     await updateRegistrationPayment(context.env.DB, registrationId, {
-      status: "payee",
+      status: paymentSnapshot.status,
       method: "helloasso",
-      reference: String(order?.payments?.[0]?.cashOutState || order.id || checkoutIntentId),
+      reference: paymentSnapshot.reference,
       payment: {
         method: "helloasso",
         helloAssoCheckoutIntentId: checkoutIntentId,
-        helloAssoOrderId: order.id || null,
+        helloAssoOrderId: order?.id || null,
         helloAssoOrder: order,
-        helloAssoState: "paid",
-        paidAt: new Date().toISOString(),
+        helloAssoState: paymentSnapshot.fullyPaid ? "paid" : "scheduled",
+        paidAt: paymentSnapshot.hasInitialPayment ? paidAt : null,
+        installmentCount: paymentSnapshot.installmentCount,
+        paidInstallments: paymentSnapshot.paidInstallments,
+        remainingInstallments: paymentSnapshot.remainingInstallments,
+        paidAmountCents: paymentSnapshot.paidAmountCents,
+        remainingAmountCents: paymentSnapshot.remainingAmountCents,
       },
     });
 
@@ -579,16 +1096,44 @@ export async function onRequestGet(context) {
       .run();
 
     // ── Email de confirmation ─────────────────────────────────────────────────
-    await sendPaymentConfirmedAlert(context.env, registration, dossier, adherentId);
+      const storedPdf = await storeRegistrationPdf(
+        context.env, registration, dossier, adherentId
+      );
+      if (storedPdf) {
+        const pdfUrl = `/api/storage/fullfighting-pdf/${storedPdf.key}`;
+        await context.env.DB.prepare(
+          `UPDATE adherents
+          SET pdf_storage_path = ?,
+          pdf_public_url   = ?,
+          pdf_nom_fichier  = ?,
+          pdf_uploaded_at  = ?,
+          updated_at       = ?
+          WHERE id = ?`
+        ).bind(
+          storedPdf.key,
+          pdfUrl,
+          storedPdf.fileName,
+          new Date().toISOString(),
+               new Date().toISOString(),
+               adherentId
+        ).run();
+      }
+
+      // ── Email de confirmation ─────────────────────────────────────────────────
+      await sendPaymentConfirmedAlert(context.env, registration, dossier, adherentId);
 
     // ── Réponse ───────────────────────────────────────────────────────────────
     return json({
       data: {
         paid: true,
+        fullyPaid: paymentSnapshot.fullyPaid,
         registrationId,
         adherentId,
         factureId,
         orderId: order?.id || null,
+        installmentCount: paymentSnapshot.installmentCount,
+        paidInstallments: paymentSnapshot.paidInstallments,
+        remainingInstallments: paymentSnapshot.remainingInstallments,
       },
       error: null,
     });

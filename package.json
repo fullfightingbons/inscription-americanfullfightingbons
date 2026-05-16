@@ -1,6 +1,6 @@
 {
 	"name": "inscription-americanfullfightingbons",
-	"description": "Cloudflare's native serverless SQL database.",
+	"description": "Site public d'inscription AFFBC déployé sur Cloudflare Workers.",
 	"cloudflare": {
 		"label": "Worker + D1 Database",
 		"products": [
