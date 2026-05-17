@@ -1,1071 +1,851 @@
 /**
- * AFFBC — Frontend JavaScript de la page d'inscription publique
- * Fichier : /assets/inscription.js   (servi depuis Cloudflare Pages)
+ * AFFBC — Worker Cloudflare Pages : soumission du formulaire d'inscription public
  *
- * Fonctionnement :
- *  1. Charge la config du club depuis /inscription-config
- *  2. Gère les 8 étapes avec validation côté client
- *  3. Sauvegarde le brouillon en localStorage
- *  4. Soumet le formulaire → crée la session HelloAsso (backend inscription.js)
- *  5. Redirige vers l'URL HelloAsso pour le paiement
- *  6. Sur retour (?helloasso=success&ref=xxx), vérifie le statut via status.js
- *     et affiche la confirmation uniquement si paid === true
+ * Ce handler :
+ *   1. Valide le payload
+ *   2. Uploade les pièces justificatives dans R2
+ *   3. Crée la session de paiement HelloAsso
+ *   4. Insère un enregistrement dans `inscriptions_publiques` (statut: paiement_en_attente)
+ *      ↳ La fiche adhérent et la vente tenue sont créées par status.js APRÈS confirmation du paiement
+ *   5. Retourne l'URL de paiement HelloAsso au front
  */
 
-'use strict';
+import { badRequest, json } from "../../_lib/data.js";
+import { getClientIp, writeAuditLog } from "../../_lib/audit.js";
 
-// ─── Configuration ────────────────────────────────────────────────────────────
-
-const DRAFT_KEY = 'affbc_inscription_draft_v4';
-const CONFIG_URL = '/inscription-config';
-const ADHERENT_ELIGIBILITY_URL = '/api/public/adherent-eligibility';
-const SUBMIT_URL = '/api/public/inscription/'; // POST — backend inscription.js
-const STATUS_URL = '/api/public/payment/helloasso/status'; // GET — backend status.js
-const QS_QUESTIONS = [
-  { key: 'familyCardiacDeath', label: 'Un membre de ta famille est-il décédé subitement d\'une cause cardiaque avant 50 ans ?' },
-  { key: 'chestPain', label: 'As-tu ressenti une douleur dans la poitrine à l\'effort ?' },
-  { key: 'wheezing', label: 'As-tu eu des sifflements ou difficultés à respirer pendant l\'effort ?' },
-  { key: 'fainting', label: 'As-tu perdu connaissance ou t\'es-tu évanoui(e) ?' },
-  { key: 'sportStop', label: 'Un médecin t\'a-t-il déjà conseillé d\'arrêter le sport ?' },
-  { key: 'longTermTreatment', label: 'Prends-tu un traitement médical de longue durée ?' },
-  { key: 'bonePain', label: 'As-tu des douleurs articulaires ou osseuses en dehors des traumatismes ?' },
-  { key: 'practiceInterrupted', label: 'As-tu dû interrompre un entraînement pour raison médicale au cours des 12 derniers mois ?' },
-  { key: 'medicalAdviceNeeded', label: 'As-tu besoin d\'un avis médical ou d\'une surveillance particulière pour pratiquer un sport ?' },
-];
-const STEP_LABELS = [
-  'Bienvenue', 'Identité', 'Coordonnées', 'Pratique',
-  'Santé', 'Commandes', 'Engagements', 'Paiement',
+const MAX_FILE_SIZE = 8 * 1024 * 1024; // 8 Mo
+const REQUIRED_QS_KEYS = [
+  "familyCardiacDeath",
+  "chestPain",
+  "wheezing",
+  "fainting",
+  "sportStop",
+  "longTermTreatment",
+  "bonePain",
+  "practiceInterrupted",
+  "medicalAdviceNeeded",
 ];
 
-// ─── État ─────────────────────────────────────────────────────────────────────
+// ─── Helpers génériques ───────────────────────────────────────────────────────
 
-let CONFIG = null;
-let currentStep = 0;
-const TOTAL_STEPS = 8;
-let bureauEligibility = { checked: false, renewalVerified: false, eligibleForBureauRate: false, reason: 'missing_fields' };
-let bureauEligibilityTimer = null;
-
-// ─── Utilitaires DOM ──────────────────────────────────────────────────────────
-
-function g(id) { return document.getElementById(id); }
-function val(id) { const el = g(id); return el ? el.value.trim() : ''; }
-function checked(id) { const el = g(id); return el ? el.checked : false; }
-function show(id, v = true) { const el = g(id); if (el) el.hidden = !v; }
-function hide(id) { show(id, false); }
-
-function getInstallmentCount() {
-  const raw = parseInt(val('installmentCount') || '1', 10);
-  return raw === 2 || raw === 3 ? raw : 1;
+function toBool(value) {
+  return value === true || value === "true" || value === "1" || value === 1 || value === "on";
 }
 
-function getInstallmentLabel(count = getInstallmentCount()) {
-  return `HelloAsso en ${count} fois`;
+function requireText(value, label) {
+  if (!String(value || "").trim()) {
+    throw new Error(`${label} obligatoire`);
+  }
+  return String(value).trim();
 }
 
-function splitInstallments(totalCents, count) {
-  const safeCount = count > 1 ? count : 1;
-  const base = Math.floor(totalCents / safeCount);
-  let remainder = totalCents - (base * safeCount);
-  return Array.from({ length: safeCount }, () => {
-    const value = base + (remainder > 0 ? 1 : 0);
+function requireDate(value, label) {
+  const clean = requireText(value, label);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
+    throw new Error(`${label} doit être au format YYYY-MM-DD`);
+  }
+  return clean;
+}
+
+function requireEmail(value) {
+  const clean = requireText(value, "Email").toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) {
+    throw new Error("Email invalide");
+  }
+  return clean;
+}
+
+function fileExtension(name = "") {
+  const clean = String(name || "");
+  const index = clean.lastIndexOf(".");
+  return index >= 0 ? clean.slice(index).toLowerCase() : "";
+}
+
+function safeFileName(name = "") {
+  return String(name || "document")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9._-]+/g, "_");
+}
+
+function parseJsonField(formData, key) {
+  const raw = formData.get(key);
+  if (!raw) {
+    throw new Error("Données d'inscription manquantes");
+  }
+  try {
+    return JSON.parse(String(raw));
+  } catch {
+    throw new Error("Payload d'inscription invalide");
+  }
+}
+
+function escapeMime(value) {
+  return String(value || "").replace(/\r?\n/g, " ").trim();
+}
+
+function normalizeHelloAssoName(value, fallback = "") {
+  return String(value || fallback || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[''`".,]/g, " ")
+    .replace(/[^A-Za-z -]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeHelloAssoFirstName(value, fallback = "") {
+  const normalized = normalizeHelloAssoName(value, fallback)
+    .replace(/-/g, " ")
+    .split(" ")
+    .filter(Boolean)[0] || "";
+  return normalized.slice(0, 64);
+}
+
+function normalizeHelloAssoLastName(value, fallback = "") {
+  const normalized = normalizeHelloAssoName(value, fallback)
+    .replace(/-/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized.slice(0, 64);
+}
+
+function normalizeInstallmentCount(value) {
+  const count = Number(value || 1);
+  return count === 2 || count === 3 ? count : 1;
+}
+
+function splitAmountCents(totalCents, count) {
+  const baseAmount = Math.floor(totalCents / count);
+  let remainder = totalCents - (baseAmount * count);
+  return Array.from({ length: count }, () => {
+    const amount = baseAmount + (remainder > 0 ? 1 : 0);
     remainder = Math.max(0, remainder - 1);
-    return value;
+    return amount;
   });
 }
 
-function formatInstallmentSchedule(totalAmount) {
-  const count = getInstallmentCount();
-  if (count <= 1) return 'Paiement comptant via HelloAsso.';
-  const totalCents = Math.round(Number(totalAmount || 0) * 100);
-  const installments = splitInstallments(totalCents, count).map((amount) => `${(amount / 100).toFixed(2)} €`);
-  return `Débit immédiat de ${installments[0]}, puis ${installments.slice(1).join(' puis ')} les mois suivants.`;
+function buildInstallmentDate(monthOffset, dayOfMonth = 5) {
+  const now = new Date();
+  const utcYear = now.getUTCFullYear();
+  const utcMonth = now.getUTCMonth();
+  const date = new Date(Date.UTC(utcYear, utcMonth + monthOffset, Math.min(dayOfMonth, 27), 12, 0, 0));
+  return date.toISOString().slice(0, 10);
 }
 
-function setAlert(msg, type = 'error') {
-  const el = g('signup-alert');
-  if (!el) return;
-  el.textContent = msg;
-  el.className = 'alert' + (type === 'info' ? ' alert-info' : '');
-  el.hidden = !msg;
-  if (msg) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-}
-
-// ─── Brouillon localStorage ───────────────────────────────────────────────────
-
-function saveDraft() {
-  try {
-    const data = collectAllFields();
-    localStorage.setItem(DRAFT_KEY, JSON.stringify({ step: currentStep, data, ts: Date.now() }));
-    const badge = g('draft-badge');
-    if (badge) badge.textContent = 'Brouillon sauvegardé à ' + new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-  } catch (e) { /* ignore */ }
-}
-
-function loadDraft() {
-  try {
-    const raw = localStorage.getItem(DRAFT_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw);
-  } catch (e) { return null; }
-}
-
-function clearDraft() {
-  localStorage.removeItem(DRAFT_KEY);
-  const badge = g('draft-badge');
-  if (badge) badge.textContent = 'Brouillon non enregistré';
-}
-
-function applyDraft(data) {
-  if (!data) return;
-  const set = (id, v) => {
-    const el = g(id);
-    if (!el || v === undefined || v === null) return;
-    if (el.type === 'checkbox') el.checked = Boolean(v);
-    else if (el.type === 'file') { /* ne pas remplir les fichiers */ }
-    else el.value = v;
-  };
-  set('lastName', data.lastName); set('firstName', data.firstName);
-  set('birthDate', data.birthDate); set('birthPlace', data.birthPlace);
-  set('address1', data.address1); set('address2', data.address2);
-  set('postalCode', data.postalCode); set('city', data.city);
-  set('phonePrimary', data.phonePrimary); set('phoneSecondary', data.phoneSecondary);
-  set('email', data.email);
-  set('emergencyLastName', data.emergencyLastName); set('emergencyFirstName', data.emergencyFirstName);
-  set('emergencyPhonePrimary', data.emergencyPhonePrimary); set('emergencyPhoneSecondary', data.emergencyPhoneSecondary);
-  set('typeInscription', data.typeInscription); set('practiceType', data.practiceType);
-  set('formulaCode', data.formulaCode); set('passportEnabled', data.passportEnabled);
-  set('passRegionEnabled', data.passRegionEnabled);
-  if (data.passRegionAmount) set('passRegionAmount', data.passRegionAmount);
-  if (data.passRegionCode) set('passRegionCode', data.passRegionCode);
-  if (data.passRegionDossierNumber) set('passRegionDossierNumber', data.passRegionDossierNumber);
-  // Mineurs
-  if (data.legalLastName) set('legalLastName', data.legalLastName);
-  if (data.legalFirstName) set('legalFirstName', data.legalFirstName);
-  if (data.legalRole) set('legalRole', data.legalRole);
-  if (data.legalCity) set('legalCity', data.legalCity);
-  if (data.legalSignedAt) set('legalSignedAt', data.legalSignedAt);
-  if (data.legalSignatureName) set('legalSignatureName', data.legalSignatureName);
-  // QS
-  if (data.qsSport) {
-    for (const key of Object.keys(data.qsSport)) {
-      const radios = document.querySelectorAll(`input[name="qs_${key}"]`);
-      radios.forEach(r => { if (r.value === data.qsSport[key]) r.checked = true; });
-    }
-  }
-  // Commandes
-  if (data.tshirtQty !== undefined) {
-    const el = document.querySelector('#clothing-order input[data-item="tshirt"]');
-    if (el) el.value = data.tshirtQty;
-  }
-  if (data.pantalonQty !== undefined) {
-    const el = document.querySelector('#clothing-order input[data-item="pantalon"]');
-    if (el) el.value = data.pantalonQty;
-  }
-  if (data.tshirtSize) {
-    const el = document.querySelector('#clothing-order select[data-size-item="tshirt"]');
-    if (el) el.value = data.tshirtSize;
-  }
-  if (data.pantalonSize) {
-    const el = document.querySelector('#clothing-order select[data-size-item="pantalon"]');
-    if (el) el.value = data.pantalonSize;
-  }
-  // Engagements
-  set('rulesAccepted', data.rulesAccepted); set('insuranceAcknowledged', data.insuranceAcknowledged);
-  set('imageRights', data.imageRights);
-  set('consentSignedAt', data.consentSignedAt); set('applicantSignatureName', data.applicantSignatureName);
-  // Paiement
-  set('payerFirstName', data.payerFirstName);
-  set('payerLastName', data.payerLastName);
-  set('installmentCount', data.installmentCount);
-  // Mise à jour des affichages conditionnels
-  updateConditionals();
-  updateSummary();
-}
-
-// ─── Collecte des champs ──────────────────────────────────────────────────────
-
-function collectQs() {
-  const qs = {};
-  for (const q of QS_QUESTIONS) {
-    const r = document.querySelector(`input[name="qs_${q.key}"]:checked`);
-    qs[q.key] = r ? r.value : '';
-  }
-  return qs;
-}
-
-function collectClothing() {
-  const tEl = document.querySelector('#clothing-order input[data-item="tshirt"]');
-  const pEl = document.querySelector('#clothing-order input[data-item="pantalon"]');
-  const tshirtSizeEl = document.querySelector('#clothing-order select[data-size-item="tshirt"]');
-  const pantalonSizeEl = document.querySelector('#clothing-order select[data-size-item="pantalon"]');
+function buildInstallmentPlan(totalCents, installmentCount) {
+  const count = normalizeInstallmentCount(installmentCount);
+  const amounts = splitAmountCents(totalCents, count);
+  const initialAmount = amounts[0];
+  const terms = amounts.slice(1).map((amount, index) => ({
+    amount,
+    date: buildInstallmentDate(index + 1),
+  }));
   return {
-    tshirtQty: Math.max(0, parseInt(tEl?.value || '0', 10)),
-    pantalonQty: Math.max(0, parseInt(pEl?.value || '0', 10)),
-    tshirtSize: tshirtSizeEl?.value || '',
-    pantalonSize: pantalonSizeEl?.value || '',
+    installmentCount: count,
+    initialAmount,
+    terms,
+    schedule: amounts.map((amount, index) => ({
+      amount,
+      date: index === 0 ? null : buildInstallmentDate(index),
+    })),
   };
 }
 
-function collectAllFields() {
-  return {
-    lastName: val('lastName'), firstName: val('firstName'),
-    birthDate: val('birthDate'), birthPlace: val('birthPlace'),
-    address1: val('address1'), address2: val('address2'),
-    postalCode: val('postalCode'), city: val('city'),
-    phonePrimary: val('phonePrimary'), phoneSecondary: val('phoneSecondary'),
-    email: val('email'),
-    emergencyLastName: val('emergencyLastName'), emergencyFirstName: val('emergencyFirstName'),
-    emergencyPhonePrimary: val('emergencyPhonePrimary'), emergencyPhoneSecondary: val('emergencyPhoneSecondary'),
-    typeInscription: val('typeInscription'), practiceType: val('practiceType'),
-    formulaCode: val('formulaCode'), passportEnabled: val('passportEnabled'),
-    passRegionEnabled: val('passRegionEnabled'), passRegionAmount: val('passRegionAmount'),
-    passRegionCode: val('passRegionCode'),
-    passRegionDossierNumber: val('passRegionDossierNumber'),
-    legalLastName: val('legalLastName'), legalFirstName: val('legalFirstName'),
-    legalRole: val('legalRole'), legalCity: val('legalCity'),
-    legalSignedAt: val('legalSignedAt'), legalSignatureName: val('legalSignatureName'),
-    qsSport: collectQs(),
-    ...collectClothing(),
-    rulesAccepted: checked('rulesAccepted'), insuranceAcknowledged: checked('insuranceAcknowledged'),
-    imageRights: val('imageRights'),
-    consentSignedAt: val('consentSignedAt'), applicantSignatureName: val('applicantSignatureName'),
-    payerFirstName: val('payerFirstName'),
-    payerLastName: val('payerLastName'),
-    installmentCount: getInstallmentCount(),
-  };
-}
-
-// ─── Calcul du total ──────────────────────────────────────────────────────────
+// ─── Calcul des totaux ────────────────────────────────────────────────────────
 
 function isMinor(birthDate) {
-  if (!birthDate) return false;
   const now = new Date();
-  const birth = new Date(birthDate + 'T00:00:00');
-  const age = now.getFullYear() - birth.getFullYear() -
+  const birth = new Date(`${birthDate}T00:00:00`);
+  const age =
+    now.getFullYear() -
+    birth.getFullYear() -
     (now.getMonth() < birth.getMonth() ||
-    (now.getMonth() === birth.getMonth() && now.getDate() < birth.getDate()) ? 1 : 0);
+    (now.getMonth() === birth.getMonth() && now.getDate() < birth.getDate())
+      ? 1
+      : 0);
   return age < 18;
 }
 
-function calculateTotals() {
-  if (!CONFIG) return null;
-  const p = CONFIG.pricing;
-  const formula = val('formulaCode');
-  const typeInscription = val('typeInscription');
-  const passRegionEnabled = val('passRegionEnabled') === 'true';
-  const passportEnabled = val('passportEnabled') === 'true';
-  const clothing = collectClothing();
+function getActiveExerciseDate(endDate) {
+  if (endDate && /^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+    return endDate;
+  }
+  const now = new Date();
+  const year = now.getMonth() >= 6 ? now.getFullYear() + 1 : now.getFullYear();
+  return `${year}-07-31`;
+}
 
-  const baseMap = { base: p.base, family: p.family, pro: p.pro, cse_thales: p.cseThales, bureau: p.bureau || 0 };
+function calculateTotals(payload) {
+  const pricing = payload?.pricing || {};
+  const formula = payload.formulaCode;
+  const typeInscription = payload.typeInscription;
+  const passRegionEnabled = toBool(payload.passRegionEnabled);
+  const passportEnabled = toBool(payload.passportEnabled);
+  const clothing = payload?.clothingOrder || {};
+
+  const baseMap = {
+    base: Number(pricing.base || 250),
+    family: Number(pricing.family || 200),
+    pro: Number(pricing.pro || 125),
+    cse_thales: Number(pricing.cseThales || 39),
+    bureau: Number(pricing.bureau || 0),
+  };
+
   const baseCotisation = baseMap[formula];
-  if (!Number.isFinite(baseCotisation)) return null;
+  if (!Number.isFinite(baseCotisation)) {
+    throw new Error("Formule tarifaire invalide");
+  }
 
-  const passRegionAmount = passRegionEnabled ? Number(val('passRegionAmount') || 0) : 0;
+  const passRegionAmount = passRegionEnabled ? Number(payload.passRegionAmount || 0) : 0;
   const cotisation = Math.max(0, baseCotisation - passRegionAmount);
 
-  const tshirtQty = Math.max(clothing.tshirtQty, typeInscription === 'nouvelle' ? 1 : 0);
-  const pantalonQty = Math.max(clothing.pantalonQty, typeInscription === 'nouvelle' ? 1 : 0);
-  const passport = passportEnabled ? p.passport : 0;
-  const newMemberKit = p.newMemberKit || 0;
-  const clothingTotal = tshirtQty * p.tshirt + pantalonQty * p.pantalon;
-  const total = cotisation + passport + clothingTotal + newMemberKit;
+  const tshirtQty = Math.max(
+    Number(clothing.tshirtQty || 0),
+    typeInscription === "nouvelle" ? 1 : 0,
+  );
+  const pantalonQty = Math.max(
+    Number(clothing.pantalonQty || 0),
+    typeInscription === "nouvelle" ? 1 : 0,
+  );
 
-  return { cotisation, passRegionAmount, passport, clothingTotal, tshirtQty, pantalonQty, newMemberKit, total };
-}
-
-function getBureauOptionLabel() {
-  const amount = Number(CONFIG?.pricing?.bureau || 0).toFixed(2);
-  return `Membres du Bureau (${amount} €)`;
-}
-
-function syncBureauFormulaOption() {
-  const formulaSelect = g('formulaCode');
-  const note = g('bureau-member-note');
-  if (!formulaSelect) return;
-
-  let bureauOption = formulaSelect.querySelector('option[value="bureau"]');
-  if (bureauEligibility.eligibleForBureauRate) {
-    if (!bureauOption) {
-      bureauOption = document.createElement('option');
-      bureauOption.value = 'bureau';
-      formulaSelect.appendChild(bureauOption);
-    }
-    bureauOption.textContent = getBureauOptionLabel();
-  } else if (bureauOption) {
-    if (formulaSelect.value === 'bureau') {
-      formulaSelect.value = '';
-    }
-    bureauOption.remove();
-  }
-
-  if (note) {
-    if (bureauEligibility.eligibleForBureauRate) {
-      note.textContent = 'Le renouvellement a été reconnu avec la discipline "membre du bureau" : l’option tarifaire à 0 € est disponible.';
-    } else if (val('typeInscription') !== 'renouvellement') {
-      note.textContent = 'L\'option Membres du Bureau apparaît automatiquement pour les renouvellements reconnus avec cette discipline dans le logiciel de gestion.';
-    } else if (!bureauEligibility.checked) {
-      note.textContent = 'Renseignez nom, prénom, date de naissance et email du dossier existant pour vérifier l\'éligibilité Membres du Bureau.';
-    } else if (bureauEligibility.reason === 'discipline_missing') {
-      note.textContent = 'Renouvellement reconnu, mais la discipline "membre du bureau" n\'est pas présente dans la fiche adhérent.';
-    } else {
-      note.textContent = 'L\'option Membres du Bureau n\'est affichée que si le renouvellement correspond à une fiche adhérent existante avec cette discipline.';
-    }
-  }
-}
-
-function getEligibilityParams() {
-  return new URLSearchParams({
-    typeInscription: val('typeInscription'),
-    lastName: val('lastName'),
-    firstName: val('firstName'),
-    birthDate: val('birthDate'),
-    email: val('email'),
-  });
-}
-
-async function refreshBureauEligibility() {
-  const typeInscription = val('typeInscription');
-  if (typeInscription !== 'renouvellement') {
-    bureauEligibility = { checked: true, renewalVerified: false, eligibleForBureauRate: false, reason: 'not_renewal' };
-    syncBureauFormulaOption();
-    return;
-  }
-
-  if (!val('lastName') || !val('firstName') || !val('birthDate') || !val('email')) {
-    bureauEligibility = { checked: false, renewalVerified: false, eligibleForBureauRate: false, reason: 'missing_fields' };
-    syncBureauFormulaOption();
-    return;
-  }
-
-  try {
-    const res = await fetch(`${ADHERENT_ELIGIBILITY_URL}?${getEligibilityParams().toString()}`, { cache: 'no-store' });
-    const payload = await res.json().catch(() => null);
-    bureauEligibility = payload?.data || { checked: true, renewalVerified: false, eligibleForBureauRate: false, reason: 'fetch_failed' };
-  } catch (e) {
-    bureauEligibility = { checked: true, renewalVerified: false, eligibleForBureauRate: false, reason: 'fetch_failed' };
-  }
-
-  syncBureauFormulaOption();
-  updateSummary();
-}
-
-function scheduleBureauEligibilityRefresh() {
-  if (bureauEligibilityTimer) window.clearTimeout(bureauEligibilityTimer);
-  bureauEligibilityTimer = window.setTimeout(() => {
-    refreshBureauEligibility();
-  }, 250);
-}
-
-// ─── Affichages conditionnels ─────────────────────────────────────────────────
-
-function updateConditionals() {
-  const minor = isMinor(val('birthDate'));
-  show('minor-block', minor);
-
-  const passRegion = val('passRegionEnabled') === 'true';
-  document.querySelectorAll('[data-show-when="passRegion"]').forEach(el => el.hidden = !passRegion);
-  document.querySelectorAll('[data-show-when="noPassRegion"]').forEach(el => el.hidden = passRegion);
-
-  const formula = val('formulaCode');
-  const needProof = formula === 'pro' || formula === 'cse_thales';
-  document.querySelectorAll('[data-show-when="proofNeeded"]').forEach(el => el.hidden = !needProof);
-
-  // Certificat médical requis si mineur ou QS positif
-  const qsSport = collectQs();
-  const qsPositive = Object.values(qsSport).some(v => v === 'yes');
-  const certRequired = minor || qsPositive;
-  show('medical-upload-block', certRequired);
-}
-
-// ─── Récapitulatif (sidebar + paiement) ──────────────────────────────────────
-
-function updateSummary() {
-  const totals = calculateTotals();
-  const qk = g('quick-summary');
-  const fs = g('final-summary');
-  const pi = g('online-payment-info');
-  const clothing = collectClothing();
-  const tshirtLabel = `${totals?.tshirtQty || 0} t-shirt${clothing.tshirtSize ? ` (${clothing.tshirtSize})` : ''}`;
-  const pantalonLabel = `${totals?.pantalonQty || 0} pantalon${clothing.pantalonSize ? ` (${clothing.pantalonSize})` : ''}`;
-
-  if (!totals) {
-    if (qk) qk.innerHTML = '<div class="summary-line"><span>Complétez les étapes pour voir le récapitulatif.</span></div>';
-    if (fs) fs.innerHTML = '';
-    return;
-  }
-
-  // Sidebar
-  if (qk) {
-    const nom = [val('lastName'), val('firstName')].filter(Boolean).join(' ');
-    qk.innerHTML = `
-      ${nom ? `<div class="summary-line"><strong>Adhérent</strong><span>${nom}</span></div>` : ''}
-      <div class="summary-line"><strong>Cotisation</strong><span>${totals.cotisation.toFixed(2)} €</span></div>
-      ${totals.passRegionAmount > 0 ? `<div class="summary-line"><strong>Remise Pass Région</strong><span>− ${totals.passRegionAmount.toFixed(2)} €</span></div>` : ''}
-      ${totals.passport > 0 ? `<div class="summary-line"><strong>Passeport sportif</strong><span>${totals.passport.toFixed(2)} €</span></div>` : ''}
-      ${totals.clothingTotal > 0 ? `<div class="summary-line"><strong>Tenue club</strong><span>${totals.clothingTotal.toFixed(2)} € · ${tshirtLabel} · ${pantalonLabel}</span></div>` : ''}
-      <div class="summary-line"><strong>Total</strong><span style="font-size:18px;color:var(--red-dark)"><strong>${totals.total.toFixed(2)} €</strong></span></div>
-      <div class="summary-line"><strong>Paiement</strong><span>${getInstallmentLabel()}</span></div>
-    `;
-  }
-
-  // Étape paiement
-  if (fs) {
-    fs.innerHTML = `
-      <div class="bank-line"><strong>Cotisation</strong><code>${totals.cotisation.toFixed(2)} €</code></div>
-      ${totals.passRegionAmount > 0 ? `<div class="bank-line"><strong>Remise Pass Région</strong><code>− ${totals.passRegionAmount.toFixed(2)} €</code></div>` : ''}
-      ${totals.passport > 0 ? `<div class="bank-line"><strong>Passeport sportif</strong><code>${totals.passport.toFixed(2)} €</code></div>` : ''}
-      ${totals.clothingTotal > 0 ? `<div class="bank-line"><strong>Tenue club (${tshirtLabel} · ${pantalonLabel})</strong><code>${totals.clothingTotal.toFixed(2)} €</code></div>` : ''}
-      <div class="bank-line" style="border-color:rgba(162,53,33,.35)"><strong>Total à régler</strong><code style="font-size:18px">${totals.total.toFixed(2)} €</code></div>
-      <div class="bank-line"><strong>Paiement</strong><code>${getInstallmentLabel()}</code></div>
-      <div class="bank-line"><strong>Échéancier</strong><code>${formatInstallmentSchedule(totals.total)}</code></div>
-    `;
-  }
-
-  const installmentHelp = g('installment-help');
-  if (installmentHelp) {
-    installmentHelp.textContent = formatInstallmentSchedule(totals.total);
-  }
-
-  updateClothingSubtotals(totals);
-  if (pi) show('online-payment-info', true);
-}
-
-// ─── Étapes ───────────────────────────────────────────────────────────────────
-
-function renderStepList() {
-  const el = g('step-list');
-  if (!el) return;
-  el.innerHTML = STEP_LABELS.map((label, i) => {
-    const cls = i === currentStep ? 'step-item active' : i < currentStep ? 'step-item done' : 'step-item';
-    return `<button type="button" class="${cls}" data-step-nav="${i}">
-      <div class="step-eyebrow">${String(i + 1).padStart(2, '0')}</div>
-      <strong>${label}</strong>
-    </button>`;
-  }).join('');
-}
-
-function renderProgress() {
-  const pt = g('progress-text');
-  const pf = g('progress-fill');
-  if (pt) pt.textContent = `Étape ${currentStep + 1} sur ${TOTAL_STEPS}`;
-  if (pf) pf.style.width = `${((currentStep + 1) / TOTAL_STEPS) * 100}%`;
-}
-
-function showStep(index) {
-  document.querySelectorAll('.step-panel').forEach((panel, i) => {
-    panel.classList.toggle('active', i === index);
-  });
-  currentStep = index;
-  renderStepList();
-  renderProgress();
-  updateConditionals();
-  updateSummary();
-  setAlert('');
-  window.scrollTo({ top: 0, behavior: 'smooth' });
-}
-
-function canNavigateToStep(targetStep) {
-  if (targetStep <= currentStep) return null;
-  for (let step = currentStep; step < targetStep; step += 1) {
-    const err = validateStep(step);
-    if (err) return err;
-  }
-  return null;
-}
-
-// ─── Validation par étape ─────────────────────────────────────────────────────
-
-function validateStep(step) {
-  setAlert('');
-  switch (step) {
-    case 1: { // Identité
-      if (!val('lastName')) return 'Le nom est obligatoire.';
-      if (!val('firstName')) return 'Le prénom est obligatoire.';
-      if (!val('birthDate')) return 'La date de naissance est obligatoire.';
-      if (!val('birthPlace')) return 'Le lieu de naissance est obligatoire.';
-      const photo = g('photoIdentity');
-      if (!photo || !photo.files?.length) return 'La photo d\'identité est obligatoire.';
-      return null;
-    }
-    case 2: { // Coordonnées
-      if (!val('address1')) return 'L\'adresse est obligatoire.';
-      if (!val('address2')) return 'Le complément d\'adresse est obligatoire (indiquez Néant si aucun).';
-      if (!val('postalCode')) return 'Le code postal est obligatoire.';
-      if (!val('city')) return 'La ville est obligatoire.';
-      if (!val('phonePrimary')) return 'Le téléphone principal est obligatoire.';
-      if (!val('phoneSecondary')) return 'Le téléphone secondaire est obligatoire.';
-      if (!val('email')) return 'L\'email est obligatoire.';
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val('email'))) return 'L\'email semble invalide.';
-      if (!val('emergencyLastName')) return 'Le nom du contact d\'urgence est obligatoire.';
-      if (!val('emergencyFirstName')) return 'Le prénom du contact d\'urgence est obligatoire.';
-      if (!val('emergencyPhonePrimary')) return 'Le téléphone principal du contact d\'urgence est obligatoire.';
-      if (!val('emergencyPhoneSecondary')) return 'Le téléphone secondaire du contact d\'urgence est obligatoire.';
-      return null;
-    }
-    case 3: { // Pratique
-      if (!val('typeInscription')) return 'Le type d\'inscription est obligatoire.';
-      if (!val('practiceType')) return 'Le type de pratique est obligatoire.';
-      if (!val('formulaCode')) return 'La formule tarifaire est obligatoire.';
-      if (!val('passportEnabled')) return 'Veuillez indiquer si vous souhaitez un passeport sportif.';
-      if (!val('passRegionEnabled')) return 'Veuillez indiquer si vous utilisez le Pass Région.';
-      if (val('passRegionEnabled') === 'true') {
-        if (!val('passRegionAmount')) return 'Veuillez sélectionner le montant du Pass Région.';
-        if (!/^\d{4}$/.test(val('passRegionCode'))) return 'Le code Pass Région doit contenir exactement 4 chiffres.';
-        if (!val('passRegionDossierNumber')) return 'Le numéro de dossier Pass Région est obligatoire.';
-        const doc = g('passRegionDocument');
-        if (!doc?.files?.length) return 'Le justificatif Pass Région est obligatoire.';
-      }
-      const formula = val('formulaCode');
-      if (formula === 'pro' || formula === 'cse_thales') {
-        const proof = g('proProofDocument');
-        if (!proof?.files?.length) return 'Le justificatif de tarif réduit est obligatoire.';
-      }
-      if (isMinor(val('birthDate'))) {
-        if (!val('legalLastName')) return 'Le nom du représentant légal est obligatoire.';
-        if (!val('legalFirstName')) return 'Le prénom du représentant légal est obligatoire.';
-        if (!val('legalRole')) return 'La qualité du représentant légal est obligatoire.';
-        if (!val('legalCity')) return 'La ville de signature est obligatoire.';
-        if (!val('legalSignedAt')) return 'La date de signature est obligatoire.';
-        if (!val('legalSignatureName')) return 'La signature du représentant légal est obligatoire.';
-      }
-      return null;
-    }
-    case 4: { // Santé
-      const qs = collectQs();
-      for (const q of QS_QUESTIONS) {
-        if (qs[q.key] !== 'yes' && qs[q.key] !== 'no') {
-          return 'Veuillez répondre à toutes les questions du questionnaire de santé.';
-        }
-      }
-      const minor = isMinor(val('birthDate'));
-      const qsPositive = Object.values(qs).some(v => v === 'yes');
-      if (minor || qsPositive) {
-        const cert = g('medicalCertificate');
-        if (!cert?.files?.length) return 'Le certificat médical est obligatoire pour votre profil.';
-      }
-      return null;
-    }
-    case 5: { // Commandes
-      const clothing = collectClothing();
-      if (clothing.tshirtQty > 0 && !clothing.tshirtSize) return 'Veuillez sélectionner une taille de t-shirt.';
-      if (clothing.pantalonQty > 0 && !clothing.pantalonSize) return 'Veuillez sélectionner une taille de pantalon.';
-      return null;
-    }
-    case 6: { // Engagements
-      if (!checked('rulesAccepted')) return 'Vous devez accepter le règlement intérieur.';
-      if (!checked('insuranceAcknowledged')) return 'Vous devez reconnaître avoir pris connaissance des modalités d\'assurance.';
-      if (!val('imageRights')) return 'Veuillez faire votre choix concernant le droit à l\'image.';
-      if (!val('consentSignedAt')) return 'La date de signature est obligatoire.';
-      if (!val('applicantSignatureName')) return 'La signature du pratiquant est obligatoire.';
-      return null;
-    }
-    case 7:
-      if (!val('payerFirstName')) return 'Le prénom du payeur est obligatoire.';
-      if (!val('payerLastName')) return 'Le nom du payeur est obligatoire.';
-      if (![1, 2, 3].includes(getInstallmentCount())) return 'Le nombre d’échéances est invalide.';
-      return null;
-    default:
-      return null;
-  }
-}
-
-// ─── QS dynamique ─────────────────────────────────────────────────────────────
-
-function renderQsGrid() {
-  const grid = g('qs-grid');
-  if (!grid) return;
-  grid.innerHTML = QS_QUESTIONS.map(q => `
-    <div class="qs-row">
-      <p>${q.label}</p>
-      <div class="radio-set">
-        <label class="radio-pill">
-          <input type="radio" name="qs_${q.key}" value="yes">
-          <span>Oui</span>
-        </label>
-        <label class="radio-pill">
-          <input type="radio" name="qs_${q.key}" value="no">
-          <span>Non</span>
-        </label>
-      </div>
-    </div>
-  `).join('');
-  // Écouter les changements pour mettre à jour l'affichage du certif
-  grid.addEventListener('change', () => { updateConditionals(); updateSummary(); });
-}
-
-// ─── Commandes tenue ──────────────────────────────────────────────────────────
-
-function renderClothingOrder() {
-  const el = g('clothing-order');
-  if (!el || !CONFIG) return;
-  const p = CONFIG.pricing;
-  const sizeOptions = ['XS', 'S', 'M', 'L', 'XL']
-    .map(size => `<option value="${size}">${size}</option>`)
-    .join('');
-  el.innerHTML = `
-    <div class="order-head">
-      <span>Article</span><span>P.U.</span><span>Taille</span><span>Qté</span><span>Sous-total</span>
-    </div>
-    <div class="order-row">
-      <div>
-        <strong>T-shirt club AFFBC</strong>
-        <small>Tenue officielle noire validée</small>
-      </div>
-      <div class="order-input"><span>${p.tshirt.toFixed(2)} €</span></div>
-      <div class="order-input">
-        <select data-size-item="tshirt">
-          <option value="">Taille</option>
-          ${sizeOptions}
-        </select>
-      </div>
-      <div class="order-input">
-        <input type="number" min="0" max="5" value="${val('typeInscription') === 'nouvelle' ? 1 : 0}"
-               data-item="tshirt" style="width:60px"
-               oninput="updateSummary()">
-      </div>
-      <div class="order-input" id="tshirt-subtotal">—</div>
-    </div>
-    <div class="order-row">
-      <div>
-        <strong>Pantalon club AFFBC</strong>
-        <small>Pantalon de boxe noir</small>
-      </div>
-      <div class="order-input"><span>${p.pantalon.toFixed(2)} €</span></div>
-      <div class="order-input">
-        <select data-size-item="pantalon">
-          <option value="">Taille</option>
-          ${sizeOptions}
-        </select>
-      </div>
-      <div class="order-input">
-        <input type="number" min="0" max="5" value="${val('typeInscription') === 'nouvelle' ? 1 : 0}"
-               data-item="pantalon" style="width:60px"
-               oninput="updateSummary()">
-      </div>
-      <div class="order-input" id="pantalon-subtotal">—</div>
-    </div>
-  `;
-  const tshirtSizeEl = el.querySelector('select[data-size-item="tshirt"]');
-  const pantalonSizeEl = el.querySelector('select[data-size-item="pantalon"]');
-  if (tshirtSizeEl) tshirtSizeEl.addEventListener('change', updateSummary);
-  if (pantalonSizeEl) pantalonSizeEl.addEventListener('change', updateSummary);
-  updateClothingSubtotals();
-}
-
-function updateClothingSubtotals(totals = calculateTotals()) {
-  if (!totals || !CONFIG) return;
-  const tshirtSubtotal = g('tshirt-subtotal');
-  const pantalonSubtotal = g('pantalon-subtotal');
-  if (tshirtSubtotal) tshirtSubtotal.textContent = `${(totals.tshirtQty * CONFIG.pricing.tshirt).toFixed(2)} €`;
-  if (pantalonSubtotal) pantalonSubtotal.textContent = `${(totals.pantalonQty * CONFIG.pricing.pantalon).toFixed(2)} €`;
-}
-
-// ─── Config du club ───────────────────────────────────────────────────────────
-
-async function loadConfig() {
-  try {
-    const res = await fetch(CONFIG_URL, { cache: 'no-store' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const payload = await res.json();
-    CONFIG = payload.data;
-    applyBranding();
-  } catch (e) {
-    // Config par défaut si l'API est indisponible
-    CONFIG = {
-      clubName: 'American Full Fighting Bons en Chablais',
-      clubEmail: 'fullfightingbons@gmail.com',
-      clubPhone: '06 99 95 81 77',
-      clubLogo: '',
-      dojoAddress: 'Centre Sportif Intercommunal des Voirons, 146 rue du Châtelard, 74890 Bons en Chablais',
-      schedule: ['Lundi 19h–20h30', 'Mercredi 20h30–22h30', 'Vendredi 20h30–22h30'],
-      pricing: { base: 250, family: 200, pro: 125, cseThales: 39, bureau: 0, newMemberKit: 35, passport: 25, passRegionMale: 30, passRegionFemale: 60, tshirt: 25, pantalon: 10 },
-      bank: {},
-      paymentProviders: { helloAssoEnabled: true },
-    };
-    applyBranding();
-  }
-}
-
-function applyBranding() {
-  if (!CONFIG) return;
-  const logo = g('club-logo');
-  if (logo && CONFIG.clubLogo) logo.src = CONFIG.clubLogo;
-  const name = g('club-name');
-  if (name && CONFIG.clubName) name.textContent = CONFIG.clubName;
-  const contact = g('club-contact');
-  if (contact) contact.textContent = [CONFIG.clubPhone, CONFIG.clubEmail].filter(Boolean).join(' · ');
-  const schedule = g('hero-schedule');
-  if (schedule && CONFIG.schedule?.length) {
-    schedule.innerHTML = CONFIG.schedule.map(s => `<li>${s}</li>`).join('');
-  }
-  const dojo = g('dojo-address');
-  if (dojo && CONFIG.dojoAddress) dojo.textContent = CONFIG.dojoAddress;
-  const stats = g('hero-stats');
-  if (stats) {
-    stats.innerHTML = `
-      <div class="stat-card"><strong>${CONFIG.pricing.base} €</strong><span>Tarif de base</span></div>
-      <div class="stat-card"><strong>${CONFIG.pricing.family} €</strong><span>Tarif famille</span></div>
-      <div class="stat-card"><strong>${CONFIG.pricing.pro} €</strong><span>Tarif pro</span></div>
-    `;
-  }
-  syncBureauFormulaOption();
-}
-
-// ─── Construction du payload JSON final ──────────────────────────────────────
-
-function buildPayload() {
-  const qs = collectQs();
-  const minor = isMinor(val('birthDate'));
-  const clothing = collectClothing();
-  const typeInscription = val('typeInscription');
-  const tshirtQty = Math.max(clothing.tshirtQty, typeInscription === 'nouvelle' ? 1 : 0);
-  const pantalonQty = Math.max(clothing.pantalonQty, typeInscription === 'nouvelle' ? 1 : 0);
+  const newMemberKit = Number(pricing.newMemberKit || 0);
+  const passport = passportEnabled ? Number(pricing.passport || 25) : 0;
+  const clothingTotal =
+    tshirtQty * Number(pricing.tshirt || 25) +
+    pantalonQty * Number(pricing.pantalon || 10);
 
   return {
-    identity: {
-      lastName: val('lastName'),
-      firstName: val('firstName'),
-      birthDate: val('birthDate'),
-      birthPlace: val('birthPlace'),
-    },
-    contact: {
-      address1: val('address1'),
-      address2: val('address2'),
-      postalCode: val('postalCode'),
-      city: val('city'),
-      phonePrimary: val('phonePrimary'),
-      phoneSecondary: val('phoneSecondary'),
-      email: val('email'),
-    },
-    emergency: {
-      lastName: val('emergencyLastName'),
-      firstName: val('emergencyFirstName'),
-      phonePrimary: val('emergencyPhonePrimary'),
-      phoneSecondary: val('emergencyPhoneSecondary'),
-    },
-    legalRepresentative: minor ? {
-      lastName: val('legalLastName'),
-      firstName: val('legalFirstName'),
-      role: val('legalRole'),
-      city: val('legalCity'),
-      signedAt: val('legalSignedAt'),
-      signatureName: val('legalSignatureName'),
-    } : {},
-    practice: {
-      typeInscription: val('typeInscription'),
-      practiceType: val('practiceType'),
-      formulaCode: val('formulaCode'),
-      passportEnabled: val('passportEnabled') === 'true',
-      passRegionEnabled: val('passRegionEnabled') === 'true',
-      passRegionAmount: val('passRegionEnabled') === 'true' ? Number(val('passRegionAmount') || 0) : 0,
-      passRegionCode: val('passRegionEnabled') === 'true' ? val('passRegionCode') : '',
-      passRegionDossierNumber: val('passRegionEnabled') === 'true' ? val('passRegionDossierNumber') : '',
-    },
-    health: {
-      qsSport: qs,
-    },
-    clothingOrder: {
-      tshirtQty,
-      pantalonQty,
-      tshirtSize: clothing.tshirtSize,
-      pantalonSize: clothing.pantalonSize,
-    },
-    consents: {
-      rulesAccepted: checked('rulesAccepted'),
-      insuranceAcknowledged: checked('insuranceAcknowledged'),
-      imageRights: val('imageRights'),
-      applicantSignatureName: val('applicantSignatureName'),
-      signedAt: val('consentSignedAt'),
-    },
-    payment: {
-      method: 'helloasso',
-      payerFirstName: val('payerFirstName'),
-      payerLastName: val('payerLastName'),
-      installmentCount: getInstallmentCount(),
-    },
-    pricing: CONFIG?.pricing || {},
+    cotisation,
+    passRegionAmount,
+    newMemberKit,
+    passport,
+    clothingTotal,
+    tshirtQty,
+    pantalonQty,
+    pricingTshirt: Number(pricing.tshirt || 25),
+    pricingPantalon: Number(pricing.pantalon || 10),
+    total: cotisation + newMemberKit + passport + clothingTotal,
   };
 }
 
-// ─── Soumission du formulaire ─────────────────────────────────────────────────
-
-async function submitForm(event) {
-  event.preventDefault();
-
-  const error = validateStep(7);
-  if (error) { setAlert(error); return; }
-
-  const btn = g('submit-button');
-  if (btn) { btn.disabled = true; btn.textContent = 'Envoi en cours…'; }
-  setAlert('');
-
-  try {
-    const payload = buildPayload();
-    const formData = new FormData();
-    formData.append('payload', JSON.stringify(payload));
-
-    // Fichiers
-    const photoFile = g('photoIdentity')?.files?.[0];
-    if (photoFile) formData.append('photoIdentity', photoFile);
-
-    const certFile = g('medicalCertificate')?.files?.[0];
-    if (certFile) formData.append('medicalCertificate', certFile);
-
-    const passRegionFile = g('passRegionDocument')?.files?.[0];
-    if (passRegionFile) formData.append('passRegionDocument', passRegionFile);
-
-    const proofFile = g('proProofDocument')?.files?.[0];
-    if (proofFile) formData.append('proProofDocument', proofFile);
-
-    // Honeypot
-    formData.append('website', '');
-
-    const res = await fetch(SUBMIT_URL, { method: 'POST', body: formData });
-    const data = await res.json().catch(() => null);
-
-    if (!res.ok || data?.error) {
-      throw new Error(data?.error || `Erreur serveur (${res.status})`);
-    }
-
-    const { helloAssoUrl, registrationId } = data.data || {};
-
-    if (!helloAssoUrl) {
-      throw new Error('Lien de paiement HelloAsso non reçu. Veuillez réessayer ou contacter le club.');
-    }
-
-    // Enregistrer l'ID pour la vérification au retour
-    try { sessionStorage.setItem('affbc_reg_id', registrationId); } catch (e) { /* ignore */ }
-    clearDraft();
-
-    // Redirection vers HelloAsso
-    window.location.href = helloAssoUrl;
-
-  } catch (err) {
-    setAlert(err.message || 'Une erreur est survenue. Veuillez réessayer.');
-    if (btn) { btn.disabled = false; btn.textContent = 'Envoyer l\'inscription'; }
-  }
+function normalizePersonName(value) {
+  return String(value || "").trim();
 }
 
-// ─── Retour depuis HelloAsso ──────────────────────────────────────────────────
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
 
-async function handleHelloAssoReturn() {
-  const params = new URLSearchParams(location.search);
-  const status = params.get('helloasso');
-  const refFromUrl = params.get('ref');
+function hasBureauDiscipline(discipline) {
+  return String(discipline || "").toLowerCase().includes("membre du bureau");
+}
 
-  if (!status) return false;
+async function findMatchingAdherent(db, payload) {
+  const nom = String(payload.identity?.lastName || "").trim().toUpperCase();
+  const prenom = normalizePersonName(payload.identity?.firstName);
+  const birthDate = payload.identity?.birthDate;
+  const email = normalizeEmail(payload.contact?.email);
 
-  // Nettoyer l'URL
-  history.replaceState({}, '', location.pathname);
+  const adherent = await db.prepare(
+    `SELECT id, nom, prenom, naissance, email, discipline FROM adherents WHERE nom = ? AND prenom = ?`,
+  )
+    .bind(nom, prenom)
+    .first();
 
-  const form = g('signup-form');
-  const successPanel = g('success-panel');
-
-  if (status === 'cancel') {
-    // L'utilisateur a annulé — rester sur le formulaire, étape paiement
-    if (form) form.hidden = false;
-    if (successPanel) successPanel.hidden = true;
-    setAlert('Le paiement a été annulé. Vous pouvez relancer le paiement en bas de cette page.', 'info');
-    showStep(7);
-    return true;
+  if (!adherent) {
+    return { adherent: null, renewalVerified: false, reason: "not_found" };
+  }
+  if (adherent.naissance !== birthDate) {
+    return { adherent, renewalVerified: false, reason: "birthdate_mismatch" };
+  }
+  if (normalizeEmail(adherent.email) !== email) {
+    return { adherent, renewalVerified: false, reason: "email_mismatch" };
   }
 
-  if (status === 'success') {
-    // Masquer le formulaire pendant la vérification
-    if (form) form.hidden = true;
-    if (successPanel) {
-      successPanel.hidden = false;
-      successPanel.innerHTML = `
-        <div class="hero-pill">Vérification…</div>
-        <h2>Vérification du paiement</h2>
-        <p>Merci de patienter, nous vérifions la confirmation de votre paiement HelloAsso…</p>
-      `;
-    }
+  return { adherent, renewalVerified: true, reason: null };
+}
 
-    // Récupérer l'ID d'inscription
-    let registrationId = refFromUrl;
-    if (!registrationId) {
-      try { registrationId = sessionStorage.getItem('affbc_reg_id'); } catch (e) { /* ignore */ }
-    }
+// ─── Validation du payload ────────────────────────────────────────────────────
 
-    if (!registrationId) {
-      showPaymentError(form, successPanel, 'Référence d\'inscription introuvable. Veuillez contacter le club en indiquant la date et l\'heure de votre paiement HelloAsso.');
-      return true;
-    }
+function validatePayload(payload) {
+  const identity = payload?.identity || {};
+  const contact = payload?.contact || {};
+  const emergency = payload?.emergency || {};
+  const legalRep = payload?.legalRepresentative || {};
+  const practice = payload?.practice || {};
+  const health = payload?.health || {};
+  const consents = payload?.consents || {};
+  const payment = payload?.payment || {};
 
-    // Polling : jusqu'à 5 tentatives espacées de 2 secondes
-    let paymentData = null;
-    for (let i = 0; i < 5; i++) {
-      try {
-        const res = await fetch(`${STATUS_URL}?registrationId=${encodeURIComponent(registrationId)}`, { cache: 'no-store' });
-        const data = await res.json().catch(() => null);
-        if (data?.data?.paid) {
-          paymentData = data.data;
-          break;
-        }
-      } catch (e) { /* continuer */ }
-      if (i < 4) await new Promise(r => setTimeout(r, 2000));
-    }
+  const birthDate = requireDate(identity.birthDate, "Date de naissance");
+  const minor = isMinor(birthDate);
 
-    if (paymentData?.paid) {
-      showPaymentSuccess(successPanel, paymentData);
-    } else {
-      // Paiement pas encore confirmé côté API — afficher message intermédiaire
-      showPaymentPending(form, successPanel, registrationId, paymentData);
-    }
-    return true;
+  requireText(identity.lastName, "Nom");
+  requireText(identity.firstName, "Prénom");
+  requireText(identity.birthPlace, "Lieu de naissance");
+  requireText(contact.address1, "Adresse");
+  requireText(contact.postalCode, "Code postal");
+  requireText(contact.city, "Ville");
+  requireText(contact.phonePrimary, "Téléphone principal");
+  requireText(contact.phoneSecondary, "Téléphone secondaire");
+  requireEmail(contact.email);
+  requireText(emergency.lastName, "Nom du contact d'urgence");
+  requireText(emergency.firstName, "Prénom du contact d'urgence");
+  requireText(emergency.phonePrimary, "Téléphone principal du contact d'urgence");
+  requireText(emergency.phoneSecondary, "Téléphone secondaire du contact d'urgence");
+  requireText(practice.typeInscription, "Type d'inscription");
+  requireText(practice.practiceType, "Type de pratique");
+  requireText(practice.formulaCode, "Formule tarifaire");
+
+  // Seul HelloAsso est accepté
+  if (payment.method !== "helloasso") {
+    throw new Error("Mode de paiement invalide : seul HelloAsso est accepté");
+  }
+  const installmentCount = normalizeInstallmentCount(payment.installmentCount);
+  if (![1, 2, 3].includes(installmentCount)) {
+    throw new Error("Le nombre d'échéances HelloAsso est invalide");
+  }
+  if (payment.payerFirstName) {
+    requireText(payment.payerFirstName, "Prénom du payeur");
+  }
+  if (payment.payerLastName) {
+    requireText(payment.payerLastName, "Nom du payeur");
+  }
+  if (minor) {
+    requireText(legalRep.lastName, "Nom du représentant légal");
+    requireText(legalRep.firstName, "Prénom du représentant légal");
+    requireText(legalRep.role, "Qualité du représentant légal");
+    requireText(legalRep.signatureName, "Signature du représentant légal");
+    requireText(legalRep.city, "Ville de l'autorisation parentale");
+    requireDate(legalRep.signedAt, "Date de l'autorisation parentale");
   }
 
-  return false;
-}
-
-function showPaymentSuccess(panel, paymentData = null) {
-  clearDraft();
-  if (!panel) return;
-  const installmentCount = Number(paymentData?.installmentCount || 1);
-  const remainingInstallments = Math.max(0, Number(paymentData?.remainingInstallments || 0));
-  const paymentDetail = installmentCount > 1 && remainingInstallments > 0
-    ? `<p>La première échéance HelloAsso a bien été confirmée. Les ${remainingInstallments} échéance(s) restantes seront prélevées automatiquement selon l'échéancier prévu.</p>`
-    : `<p>Votre inscription au club AFFBC a bien été enregistrée et votre paiement HelloAsso est confirmé.</p>`;
-  panel.hidden = false;
-  panel.innerHTML = `
-    <div class="hero-pill">✅ Dossier validé</div>
-    <h2>Paiement confirmé !</h2>
-    ${paymentDetail}
-    <p>Votre fiche adhérent a été créée dans le logiciel de gestion du club. Vous recevrez votre licence FFK une fois le dossier complet vérifié par l'équipe dirigeante.</p>
-    <div class="success-note">
-      📧 Le club a été notifié par email. N'hésitez pas à les contacter si vous avez des questions.
-    </div>
-    <div class="success-actions" style="margin-top:18px">
-      <button type="button" class="btn" onclick="window.location.reload()">Déposer une autre inscription</button>
-    </div>
-  `;
-}
-
-function showPaymentPending(form, panel, registrationId, paymentData = null) {
-  if (form) form.hidden = true;
-  if (!panel) return;
-  panel.hidden = false;
-  panel.innerHTML = `
-    <div class="hero-pill" style="background:rgba(196,154,55,.2);color:#674b12">⏳ En attente</div>
-    <h2>Paiement en cours de vérification</h2>
-    <p>Votre paiement HelloAsso est en cours de traitement. La confirmation peut prendre quelques minutes.</p>
-    <div class="success-note">
-      📋 <strong>Référence de votre dossier :</strong> ${registrationId}<br>
-      Conservez cette référence. Si votre fiche n'apparaît pas dans les 24h, contactez le club en indiquant cette référence.
-    </div>
-    <div class="success-actions" style="margin-top:18px">
-      <button type="button" class="btn primary" onclick="recheckStatus('${registrationId}')">Vérifier à nouveau</button>
-      <button type="button" class="btn" onclick="window.location.reload()">Nouvelle inscription</button>
-    </div>
-  `;
-}
-
-function showPaymentError(form, panel, message) {
-  if (form) form.hidden = false;
-  if (panel) panel.hidden = true;
-  setAlert(message || 'Une erreur est survenue lors de la vérification du paiement.');
-  showStep(7);
-}
-
-// Expose pour le bouton "Vérifier à nouveau"
-window.recheckStatus = async function(registrationId) {
-  const panel = g('success-panel');
-  if (panel) panel.innerHTML = '<p>Vérification en cours…</p>';
-  try {
-    const res = await fetch(`${STATUS_URL}?registrationId=${encodeURIComponent(registrationId)}`, { cache: 'no-store' });
-    const data = await res.json().catch(() => null);
-    if (data?.data?.paid) {
-      showPaymentSuccess(panel, data?.data || null);
-    } else {
-      showPaymentPending(null, panel, registrationId, data?.data || null);
-    }
-  } catch (e) {
-    if (panel) panel.innerHTML = `<p class="alert">Erreur de connexion. Veuillez réessayer. Référence : ${registrationId}</p>`;
-  }
-};
-
-// ─── Initialisation ───────────────────────────────────────────────────────────
-
-async function init() {
-  // 1. Charger la config
-  await loadConfig();
-
-  // 2. Vérifier si on revient de HelloAsso
-  const handled = await handleHelloAssoReturn();
-  if (handled) return;
-
-  // 3. Rendre le QS et les commandes
-  renderQsGrid();
-  renderClothingOrder();
-
-  // 4. Recharger le brouillon
-  const draft = loadDraft();
-  if (draft?.data) {
-    applyDraft(draft.data);
-    const alert = g('draft-alert');
-    if (alert) {
-      alert.hidden = false;
-      alert.textContent = 'Un brouillon a été restauré. Vérifiez vos informations avant de continuer.';
+  for (const key of REQUIRED_QS_KEYS) {
+    if (health.qsSport?.[key] !== "yes" && health.qsSport?.[key] !== "no") {
+      throw new Error("Toutes les réponses au questionnaire de santé sont obligatoires");
     }
   }
 
-  // 5. Afficher l'étape initiale
-  showStep(draft?.step || 0);
+  if (!toBool(consents.rulesAccepted)) {
+    throw new Error("L'acceptation du règlement intérieur est obligatoire");
+  }
+  if (consents.imageRights !== "yes" && consents.imageRights !== "no") {
+    throw new Error("Le choix du droit à l'image est obligatoire");
+  }
+  requireText(consents.applicantSignatureName, "Signature du pratiquant");
+  requireDate(consents.signedAt, "Date de signature");
 
-  // 6. Navigation étape suivante / précédente
-  document.addEventListener('click', e => {
-    const nextBtn = e.target.closest('[data-next]');
-    const prevBtn = e.target.closest('[data-prev]');
-    const stepBtn = e.target.closest('[data-step-nav]');
+  if (
+    practice.passRegionEnabled &&
+    !/^\d{4}$/.test(String(practice.passRegionCode || "").trim())
+  ) {
+    throw new Error("Le code Pass Région doit contenir 4 chiffres");
+  }
 
-    if (nextBtn) {
-      const err = validateStep(currentStep);
-      if (err) { setAlert(err); return; }
-      saveDraft();
-      showStep(Math.min(currentStep + 1, TOTAL_STEPS - 1));
-      if (currentStep === 5) renderClothingOrder(); // Recalcul quantités tenue
+  if (
+    practice.passRegionEnabled &&
+    !String(practice.passRegionDossierNumber || "").trim()
+  ) {
+    throw new Error("Le numéro de dossier Pass Région est obligatoire");
+  }
+
+  const certificateRequired =
+    minor || REQUIRED_QS_KEYS.some((key) => health.qsSport?.[key] === "yes");
+
+  return { birthDate, minor, certificateRequired };
+}
+
+// ─── Upload R2 ────────────────────────────────────────────────────────────────
+
+async function uploadRequiredFile(env, registrationId, file, targetName, preferImage = false) {
+  if (!(file instanceof File) || !file.size) {
+    throw new Error(`Le document ${targetName} est obligatoire`);
+  }
+  if (file.size > MAX_FILE_SIZE) {
+    throw new Error(
+      `Le document ${targetName} dépasse ${Math.round(MAX_FILE_SIZE / 1024 / 1024)} Mo`,
+    );
+  }
+  if (preferImage) {
+    if (!["image/jpeg", "image/png"].includes(file.type)) {
+      throw new Error(`Le document ${targetName} doit être une image JPEG ou PNG`);
     }
-
-    if (prevBtn) {
-      showStep(Math.max(currentStep - 1, 0));
+  } else {
+    if (file.type !== "application/pdf") {
+      throw new Error(`Le document ${targetName} doit être un fichier PDF`);
     }
+  }
 
-    if (stepBtn) {
-      const targetStep = Number(stepBtn.dataset.stepNav);
-      if (Number.isNaN(targetStep) || targetStep === currentStep) return;
-      const err = canNavigateToStep(targetStep);
-      if (err) { setAlert(err); return; }
-      saveDraft();
-      showStep(targetStep);
-    }
+  const bucket = preferImage
+    ? env.R2_STORAGE || env.R2_PDF
+    : env.R2_PDF || env.R2_STORAGE;
+  if (!bucket) {
+    throw new Error("Le stockage des pièces justificatives n'est pas configuré");
+  }
+
+  const key = `public-inscriptions/${registrationId}/${targetName}${
+    fileExtension(file.name) || (preferImage ? ".jpg" : ".pdf")
+  }`;
+
+  await bucket.put(key, await file.arrayBuffer(), {
+    httpMetadata: { contentType: file.type || (preferImage ? "image/jpeg" : "application/pdf") },
+    customMetadata: { originalName: safeFileName(file.name || targetName) },
   });
 
-  // 7. Sauvegarde du brouillon à chaque modification
-  document.addEventListener('input', () => { updateConditionals(); updateSummary(); });
-  document.addEventListener('change', () => { updateConditionals(); updateSummary(); });
-  document.addEventListener('input', scheduleBureauEligibilityRefresh);
-  document.addEventListener('change', scheduleBureauEligibilityRefresh);
-
-  // 8. Soumission du formulaire
-  const form = g('signup-form');
-  if (form) form.addEventListener('submit', submitForm);
-
-  // 9. Bouton effacer le brouillon
-  const clearBtn = g('clear-draft-button');
-  if (clearBtn) {
-    clearBtn.addEventListener('click', () => {
-      if (confirm('Effacer le brouillon et recommencer depuis le début ?')) {
-        clearDraft();
-        location.reload();
-      }
-    });
-  }
-
-  // 10. Mise à jour initiale
-  updateConditionals();
-  await refreshBureauEligibility();
-  updateSummary();
+  return {
+    bucket: preferImage
+      ? env.R2_STORAGE ? "storage" : "fullfighting-pdf"
+      : env.R2_PDF ? "fullfighting-pdf" : "storage",
+    key,
+    name: file.name || targetName,
+    contentType: file.type || "",
+    size: file.size || 0,
+  };
 }
 
-document.addEventListener('DOMContentLoaded', init);
+// ─── HelloAsso ────────────────────────────────────────────────────────────────
+
+async function getHelloAssoToken(env) {
+  const baseUrl = env.HELLOASSO_ENV === "sandbox" ? "https://api.helloasso-sandbox.com" : "https://api.helloasso.com";
+  const response = await fetch(`${baseUrl}/oauth2/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: env.HELLOASSO_CLIENT_ID,
+      client_secret: env.HELLOASSO_CLIENT_SECRET,
+    }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`HelloAsso auth échouée (${response.status}) : ${text}`);
+  }
+  const data = await response.json();
+  if (!data.access_token) {
+    throw new Error("HelloAsso : token absent de la réponse d'authentification");
+  }
+  return data.access_token;
+}
+
+async function createHelloAssoCheckout(env, payload, totals, registrationId) {
+  const helloAssoEnabled =
+    env.HELLOASSO_CLIENT_ID &&
+    env.HELLOASSO_CLIENT_SECRET &&
+    env.HELLOASSO_ORGANIZATION_SLUG;
+
+  if (!helloAssoEnabled) {
+    throw new Error(
+      "HelloAsso n'est pas configuré sur ce serveur. Vérifiez les variables d'environnement HELLOASSO_CLIENT_ID, HELLOASSO_CLIENT_SECRET et HELLOASSO_ORGANIZATION_SLUG.",
+    );
+  }
+
+  const amountCents = Math.round(totals.total * 100);
+  if (amountCents <= 0) {
+    throw new Error("Le montant du dossier est nul — impossible de créer un paiement HelloAsso.");
+  }
+  const installmentPlan = buildInstallmentPlan(
+    amountCents,
+    payload.payment?.installmentCount,
+  );
+  payload.payment = {
+    ...(payload.payment || {}),
+    installmentCount: installmentPlan.installmentCount,
+    schedule: installmentPlan.schedule,
+  };
+
+  const token = await getHelloAssoToken(env);
+
+  const origin = String(env.PUBLIC_ORIGIN || "https://inscription.americanfullfightingbons.fr").replace(/\/+$/, "");
+  const firstName = String(payload.identity?.firstName || "").trim();
+  const lastName = String(payload.identity?.lastName || "").trim();
+  const birthDate = String(payload.identity?.birthDate || "").trim();
+  const email = String(payload.contact?.email || "").trim();
+  const address = String(payload.contact?.address1 || "").trim();
+  const city = String(payload.contact?.city || "").trim();
+  const zipCode = String(payload.contact?.postalCode || "").trim();
+  const legalRep = payload.legalRepresentative || {};
+  let payerFirstName = String(payload.payment?.payerFirstName || "").trim();
+  let payerLastName = String(payload.payment?.payerLastName || "").trim();
+  if (!payerFirstName || !payerLastName) {
+    payerFirstName = String(legalRep.firstName || payerFirstName || firstName).trim();
+    payerLastName = String(legalRep.lastName || payerLastName || lastName).trim();
+  }
+  payerFirstName = normalizeHelloAssoFirstName(payerFirstName, firstName) || "Adherent";
+  payerLastName = normalizeHelloAssoLastName(payerLastName, lastName) || "AFFBC";
+
+  const body = {
+    totalAmount: amountCents,
+    initialAmount: installmentPlan.initialAmount,
+    itemName: `Inscription AFFBC — ${firstName} ${lastName}`.trim(),
+    backUrl: `${origin}/?helloasso=cancel`,
+    errorUrl: `${origin}/?helloasso=cancel`,
+    returnUrl: `${origin}/?helloasso=success&ref=${registrationId}`,
+    containsDonation: false,
+    payer: {
+      firstName: payerFirstName,
+      lastName: payerLastName,
+      email,
+      dateOfBirth: birthDate || undefined,
+      address: address || undefined,
+      city: city || undefined,
+      zipCode: zipCode || undefined,
+      country: "FRA",
+      companyName: env.APP_NAME || "AFFBC",
+    },
+    metadata: {
+      registrationId,
+      formula: payload.practice?.formulaCode || "",
+      nom: lastName,
+      prenom: firstName,
+      installmentCount: installmentPlan.installmentCount,
+    },
+  };
+  if (installmentPlan.terms.length > 0) {
+    body.terms = installmentPlan.terms;
+  }
+
+  const baseUrl = env.HELLOASSO_ENV === "sandbox" ? "https://api.helloasso-sandbox.com/v5" : "https://api.helloasso.com/v5";
+  const response = await fetch(
+    `${baseUrl}/organizations/${env.HELLOASSO_ORGANIZATION_SLUG}/checkout-intents`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    },
+  );
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`HelloAsso checkout échoué (${response.status}) : ${text}`);
+  }
+
+  const data = await response.json();
+  return {
+    url: data.redirectUrl || data.checkoutUrl || null,
+    checkoutIntentId: data.id || null,
+  };
+}
+
+// ─── Emails Brevo ─────────────────────────────────────────────────────────────
+
+function buildEmailHtml(payload, totals, registrationId, helloAssoUrl) {
+  const identity = payload.identity || {};
+  const contact = payload.contact || {};
+  const practice = payload.practice || {};
+  const installmentCount = normalizeInstallmentCount(payload.payment?.installmentCount);
+  const helloAssoLine = helloAssoUrl
+    ? `<p><strong>🔗 Lien de paiement HelloAsso :</strong> <a href="${helloAssoUrl}">${helloAssoUrl}</a></p>`
+    : "<p><em>⚠️ Lien HelloAsso non généré — vérifier la configuration.</em></p>";
+
+  return `
+  <html>
+  <body style="font-family:Arial,sans-serif;color:#20140f;max-width:600px">
+    <h2 style="color:#a23521">Nouvelle inscription AFFBC</h2>
+    <p><strong>Référence dossier :</strong> ${escapeMime(registrationId)}</p>
+    <hr>
+    <h3>Adhérent</h3>
+    <p><strong>Nom :</strong> ${escapeMime(identity.lastName)} ${escapeMime(identity.firstName)}</p>
+    <p><strong>Email :</strong> ${escapeMime(contact.email)}</p>
+    <p><strong>Téléphone :</strong> ${escapeMime(contact.phonePrimary)}</p>
+    <p><strong>Ville :</strong> ${escapeMime(contact.city)}</p>
+    <hr>
+    <h3>Dossier</h3>
+    <p><strong>Formule :</strong> ${escapeMime(practice.formulaCode)}</p>
+    <p><strong>Type d'inscription :</strong> ${escapeMime(practice.typeInscription)}</p>
+    <p><strong>Montant total :</strong> ${totals.total.toFixed(2)} €</p>
+    <p><strong>Mode de paiement :</strong> HelloAsso (${installmentCount} fois${installmentCount === 1 ? "" : " prévues"}, en attente de confirmation)</p>
+    ${helloAssoLine}
+    <hr>
+    <p style="color:#888;font-size:12px">
+      La fiche adhérent et la vente tenue seront créées automatiquement dans le logiciel
+      dès confirmation du paiement par HelloAsso.
+    </p>
+  </body>
+  </html>`.trim();
+}
+
+function buildEmailText(payload, totals, registrationId, helloAssoUrl) {
+  const identity = payload.identity || {};
+  const contact = payload.contact || {};
+  const practice = payload.practice || {};
+  const installmentCount = normalizeInstallmentCount(payload.payment?.installmentCount);
+  return [
+    "Nouvelle inscription AFFBC",
+    `Référence dossier : ${registrationId}`,
+    "",
+    `Adhérent : ${identity.firstName} ${identity.lastName}`,
+    `Email : ${contact.email}`,
+    `Téléphone : ${contact.phonePrimary}`,
+    `Ville : ${contact.city}`,
+    "",
+    `Formule : ${practice.formulaCode}`,
+    `Type : ${practice.typeInscription}`,
+    `Montant total : ${totals.total.toFixed(2)} €`,
+    `Mode de paiement : HelloAsso (${installmentCount} fois${installmentCount === 1 ? "" : " prévues"}, en attente)`,
+    helloAssoUrl ? `Lien HelloAsso : ${helloAssoUrl}` : "⚠️ Lien HelloAsso non généré",
+  ].join("\n");
+}
+
+async function sendSignupAlert(env, payload, totals, registrationId, helloAssoUrl) {
+  if (!env.BREVO_API_KEY) {
+    return { sent: false, reason: "brevo_api_key_missing" };
+  }
+  const to = env.SIGNUP_ALERT_TO || "fullfightingbons@gmail.com";
+  const from = env.SIGNUP_ALERT_FROM || "contact@americanfullfightingbons.fr";
+  const identity = payload.identity || {};
+  const subject = `Nouvelle inscription AFFBC — ${escapeMime(identity.lastName)} ${escapeMime(identity.firstName)}`.trim();
+
+  const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      "api-key": env.BREVO_API_KEY,
+    },
+    body: JSON.stringify({
+      sender: {
+        name: env.SIGNUP_ALERT_SENDER_NAME || "AFFBC Inscriptions",
+        email: from,
+      },
+      to: [{ email: to, name: env.SIGNUP_ALERT_TO_NAME || "AFFBC" }],
+      subject,
+      htmlContent: buildEmailHtml(payload, totals, registrationId, helloAssoUrl),
+      textContent: buildEmailText(payload, totals, registrationId, helloAssoUrl),
+    }),
+  });
+  const result = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(result?.message || `brevo_http_${response.status}`);
+  }
+  return { sent: true, messageId: result?.messageId || null };
+}
+
+// ─── Base de données — Exercice actif ─────────────────────────────────────────
+
+async function findActiveExercise(db) {
+  const active = await db
+    .prepare(`SELECT * FROM exercices WHERE statut = 'actif' ORDER BY date_debut DESC LIMIT 1`)
+    .first();
+  if (active?.id) return active;
+  return db
+    .prepare(`SELECT * FROM exercices ORDER BY date_debut DESC LIMIT 1`)
+    .first();
+}
+
+// ─── Handler principal ────────────────────────────────────────────────────────
+
+export async function onRequestPost(context) {
+  if (!context.env.DB) {
+    return badRequest("D1 binding is missing", 500);
+  }
+
+  try {
+    const formData = await context.request.formData();
+
+    // Honeypot anti-spam
+    if (String(formData.get("website") || "").trim()) {
+      return json({ data: { accepted: true }, error: null });
+    }
+
+    const payload = parseJsonField(formData, "payload");
+    const validation = validatePayload(payload);
+
+    // ── Vérification renouvellement ──────────────────────────────────────────
+    let matchingAdherent = null;
+    if (payload.practice.typeInscription === "renouvellement") {
+      const renewalCheck = await findMatchingAdherent(context.env.DB, payload);
+      matchingAdherent = renewalCheck.adherent;
+
+      if (!renewalCheck.adherent) {
+        return badRequest(
+          "Nom et prénom non trouvés dans la base d'adhérents pour un renouvellement de licence",
+        );
+      }
+      if (renewalCheck.reason === "birthdate_mismatch") {
+        return badRequest(
+          "La date de naissance ne correspond pas à celle enregistrée pour cet adhérent",
+        );
+      }
+      if (renewalCheck.reason === "email_mismatch") {
+        return badRequest("L'email ne correspond pas à celui enregistré pour cet adhérent");
+      }
+    }
+
+    if (payload.practice.formulaCode === "bureau") {
+      if (payload.practice.typeInscription !== "renouvellement") {
+        return badRequest(
+          "Le tarif Membres du Bureau est réservé aux renouvellements correspondant à un adhérent existant",
+        );
+      }
+      if (!matchingAdherent) {
+        const renewalCheck = await findMatchingAdherent(context.env.DB, payload);
+        matchingAdherent = renewalCheck.adherent;
+        if (!renewalCheck.renewalVerified) {
+          return badRequest(
+            "Impossible de vérifier l'adhérent pour appliquer le tarif Membres du Bureau",
+          );
+        }
+      }
+      if (!hasBureauDiscipline(matchingAdherent.discipline)) {
+        return badRequest(
+          "Le tarif Membres du Bureau n'est autorisé que pour les adhérents dont la discipline contient \"membre du bureau\"",
+        );
+      }
+    }
+
+    // ── Calcul des totaux ────────────────────────────────────────────────────
+    const totals = calculateTotals({
+      ...payload.practice,
+      pricing: payload.pricing,
+      clothingOrder: payload.clothingOrder,
+      passRegionAmount: payload.practice?.passRegionAmount,
+      passRegionEnabled: payload.practice?.passRegionEnabled,
+      passportEnabled: payload.practice?.passportEnabled,
+    });
+    totals.certificateRequired = validation.certificateRequired;
+
+    // ── Upload des pièces justificatives ─────────────────────────────────────
+    const registrationId = crypto.randomUUID();
+    const uploadedDocuments = {};
+
+    uploadedDocuments.photoIdentity = await uploadRequiredFile(
+      context.env,
+      registrationId,
+      formData.get("photoIdentity"),
+      "photo-identite",
+      true,
+    );
+
+    if (validation.certificateRequired) {
+      uploadedDocuments.medicalCertificate = await uploadRequiredFile(
+        context.env,
+        registrationId,
+        formData.get("medicalCertificate"),
+        "certificat-medical",
+        false,
+      );
+    }
+
+    if (toBool(payload.practice?.passRegionEnabled)) {
+      uploadedDocuments.passRegionDocument = await uploadRequiredFile(
+        context.env,
+        registrationId,
+        formData.get("passRegionDocument"),
+        "pass-region",
+        false,
+      );
+    }
+
+    if (
+      payload.practice?.formulaCode === "pro" ||
+      payload.practice?.formulaCode === "cse_thales"
+    ) {
+      uploadedDocuments.proofDocument = await uploadRequiredFile(
+        context.env,
+        registrationId,
+        formData.get("proProofDocument"),
+        "justificatif-tarif",
+        false,
+      );
+    }
+
+    // ── Création de la session de paiement HelloAsso (BLOQUANT) ─────────────
+    const checkout = await createHelloAssoCheckout(
+      context.env,
+      payload,
+      totals,
+      registrationId,
+    );
+    const helloAssoUrl = checkout.url;
+    const helloAssoCheckoutIntentId = checkout.checkoutIntentId;
+
+    // ── Insertion dans inscriptions_publiques ────────────────────────────────
+    const exercise = await findActiveExercise(context.env.DB);
+    const now = new Date().toISOString();
+
+    const row = {
+      id: registrationId,
+      nom: String(payload.identity.lastName || "").trim().toUpperCase(),
+      prenom: String(payload.identity.firstName || "").trim(),
+      email: String(payload.contact.email || "").trim().toLowerCase(),
+      telephone: String(payload.contact.phonePrimary || "").trim(),
+      naissance: payload.identity.birthDate,
+      ville: String(payload.contact.city || "").trim(),
+      formule_code: String(payload.practice.formulaCode || "").trim(),
+      pratique_type: String(payload.practice.practiceType || "").trim(),
+      montant_total: totals.total,
+      paiement_mode: "helloasso",
+      paiement_reference: `ONLINE-${registrationId.slice(0, 8).toUpperCase()}`,
+      statut: "paiement_en_attente",
+      mineur: validation.minor ? 1 : 0,
+      pass_region: toBool(payload.practice.passRegionEnabled) ? 1 : 0,
+      droit_image: payload.consents.imageRights === "yes" ? 1 : 0,
+      reglement_accepte: toBool(payload.consents.rulesAccepted) ? 1 : 0,
+      adherent_id: null,
+      helloasso_checkout_intent_id: helloAssoCheckoutIntentId,
+      helloasso_url: helloAssoUrl,
+      dossier_json: JSON.stringify({ ...payload, computedTotals: totals }),
+      documents_json: JSON.stringify(uploadedDocuments),
+      exercice_id: exercise?.id || null,
+      created_at: now,
+      updated_at: now,
+      submitted_at: now,
+    };
+
+    const columns = Object.keys(row);
+    await context.env.DB.prepare(
+      `INSERT INTO inscriptions_publiques (${columns.map((c) => `"${c}"`).join(", ")}) VALUES (${columns
+        .map(() => "?")
+        .join(", ")})`,
+    )
+      .bind(...columns.map((c) => row[c]))
+      .run();
+
+    // ── Email d'alerte ────────────────────────────────────────────────────────
+    let emailAlertStatus = { sent: false, reason: "not_attempted" };
+    try {
+      emailAlertStatus = await sendSignupAlert(
+        context.env,
+        payload,
+        totals,
+        registrationId,
+        helloAssoUrl,
+      );
+    } catch (error) {
+      emailAlertStatus = { sent: false, reason: error.message || "send_failed" };
+    }
+
+    // ── Audit log ─────────────────────────────────────────────────────────────
+    await writeAuditLog(context.env.DB, {
+      action: "public.inscription_submitted",
+      entityType: "inscriptions_publiques",
+      entityId: registrationId,
+      details: {
+        email: row.email,
+        total: totals.total,
+        formula: row.formule_code,
+        paymentMethod: "helloasso",
+        helloAssoCheckoutIntentId,
+        emailAlertStatus,
+      },
+      ip: getClientIp(context.request),
+    }).catch(() => {});
+
+    return json({
+      data: {
+        registrationId,
+        total: totals.total,
+        helloAssoUrl,
+        helloAssoCheckoutIntentId,
+      },
+      error: null,
+    });
+  } catch (error) {
+    return badRequest(error.message, 500);
+  }
+}
