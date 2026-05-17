@@ -21,6 +21,7 @@ const CONFIG_URL = '/inscription-config';
 const ADHERENT_ELIGIBILITY_URL = '/api/public/adherent-eligibility';
 const SUBMIT_URL = '/api/public/inscription/'; // POST — backend inscription.js
 const STATUS_URL = '/api/public/payment/helloasso/status'; // GET — backend status.js
+const TARIFS_URL = '/api/public/tarifs';
 const QS_QUESTIONS = [
   { key: 'familyCardiacDeath', label: 'Un membre de ta famille est-il décédé subitement d\'une cause cardiaque avant 50 ans ?' },
   { key: 'chestPain', label: 'As-tu ressenti une douleur dans la poitrine à l\'effort ?' },
@@ -990,9 +991,22 @@ window.recheckStatus = async function(registrationId) {
 
 // ─── Initialisation ───────────────────────────────────────────────────────────
 
+async function loadTarifs() {
+  try {
+    const res = await fetch(TARIFS_URL, { cache: 'no-store' });
+    if (!res.ok) return;
+    const { pricing } = await res.json();
+    if (!pricing || !CONFIG) return;
+    // Fusionne par-dessus la config existante — les clés absentes restent inchangées
+    CONFIG.pricing = { ...CONFIG.pricing, ...pricing };
+    applyBranding(); // met à jour les stat-cards dans le header
+  } catch (e) { /* si l'endpoint n'est pas encore déployé, on garde CONFIG tel quel */ }
+}
+
 async function init() {
   // 1. Charger la config
   await loadConfig();
+  await loadTarifs();
 
   // 2. Vérifier si on revient de HelloAsso
   const handled = await handleHelloAssoReturn();

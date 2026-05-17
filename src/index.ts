@@ -3,6 +3,7 @@ import { onRequestGet as getAdherentEligibility } from "./routes/api/public/adhe
 import { onRequestPost as postInscription } from "./routes/api/public/inscription.js";
 import { onRequestPost as postHelloAssoNotification } from "./routes/api/public/payment/helloasso/notification.js";
 import { onRequestGet as getHelloAssoStatus } from "./routes/api/public/payment/helloasso/status.js";
+import { onRequestGet as getTarifs } from "./routes/api/public/tarifs.js";
 
 type WorkerEnv = {
   [key: string]: unknown;
@@ -86,6 +87,12 @@ export default {
         return methodNotAllowed(["POST"]);
       }
       return postHelloAssoNotification(context);
+    }
+    if (path === "/api/public/tarifs") {
+      if (method !== "GET" && method !== "HEAD") {
+        return methodNotAllowed(["GET", "HEAD"]);
+      }
+      return getTarifs(context);
     }
 
     if (env.ASSETS) {
