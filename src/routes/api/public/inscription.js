@@ -197,6 +197,13 @@ function calculateTotals(payload) {
   if (!Number.isFinite(baseCotisation)) {
     throw new Error("Formule tarifaire invalide");
   }
+  const formulaLabelMap = {
+    base:      'Tarif standard',
+    family:    'Tarif famille',
+    pro:       'Tarif professionnel',
+    cse_thales:'Tarif CSE Thales',
+    bureau:    'Membres du Bureau',
+  };
 
   const passRegionAmount = passRegionEnabled ? Number(payload.passRegionAmount || 0) : 0;
   const cotisation = Math.max(0, baseCotisation - passRegionAmount);
@@ -227,6 +234,7 @@ function calculateTotals(payload) {
     pricingTshirt: Number(pricing.tshirt || 25),
     pricingPantalon: Number(pricing.pantalon || 10),
     total: cotisation + newMemberKit + passport + clothingTotal,
+    formulaLabel: formulaLabelMap[formula] || formula,
   };
 }
 
@@ -245,9 +253,14 @@ function hasBureauDiscipline(discipline) {
 async function findMatchingAdherent(db, payload) {
   const nom = String(payload.identity?.lastName || "").trim().toUpperCase();
   const prenom = normalizePersonName(payload.identity?.firstName);
-  const birthDate = payload.identity?.birthDate;
+  const birthDate = String(payload.identity?.birthDate || "").trim();
   const email = normalizeEmail(payload.contact?.email);
 
+  if (!nom || !prenom || !birthDate || !email) {
+    return { adherent: null, renewalVerified: false, reason: "missing_fields" };
+  }
+
+  // Recherche d'abord sur nom+prenom pour pouvoir distinguer les raisons d'échec
   const adherent = await db.prepare(
     `SELECT id, nom, prenom, naissance, email, discipline FROM adherents WHERE nom = ? AND prenom = ?`,
   )
