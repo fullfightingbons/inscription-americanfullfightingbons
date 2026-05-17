@@ -5,7 +5,7 @@ const DEFAULT_CONFIG = {
   clubAddress: "15 Place Henri Boucher 74890 Bons En Chablais",
   clubEmail: "fullfightingbons@gmail.com",
   clubPhone: "06 99 95 81 77",
-  clubLogo: "/cloudflare/export/assets/storage/Logo_1_nnoir_copie-removebg-preview.png",
+  clubLogo: "/assets/Logo_1_nnoir_copie-removebg-preview.png",
   dojoAddress: "Centre Sportif Intercommunal des Voirons, 146 rue du Châtelard, 74890 Bons en Chablais",
   schedule: [
     "Lundi : 19h00 - 20h30",
