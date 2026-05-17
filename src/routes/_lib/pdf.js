@@ -332,17 +332,27 @@ export function generateAdherentPdf(registration) {
     p.rect(0, 0, 210, 1.5, 'f');
     p.rect(0, 1.5, 210, 36, 'f');
 
+    // Logo : cercle blanc avec contour rouge, texte FULL FIGHTING BONS EN CHABLAIS
+    const LOGO_CX  = ML/MM + 17;   // centre X du logo (mm)
+    const LOGO_CY  = 19.5;         // centre Y du logo (mm)
+    const LOGO_R   = 16;           // rayon (mm) — était 11
+
+    // Cercle de fond blanc
     p.setFillRgb(WHITE);
-    p.circle(ML/MM + 12, 19.5, 11, 'f');
+    p.circle(LOGO_CX, LOGO_CY, LOGO_R, 'f');
+    // Anneau de contour rouge (double trait pour l'effet)
     p.setStrokeRgb(RED);
-    p.setLineWidth(0.5);
-    p.circle(ML/MM + 12, 19.5, 11, 'S');
+    p.setLineWidth(1.2);
+    p.circle(LOGO_CX, LOGO_CY, LOGO_R, 'S');
+    p.setLineWidth(0.3);
+    p.circle(LOGO_CX, LOGO_CY, LOGO_R - 1.5, 'S');
 
-    p.text('FULL',             ML/MM + 12, 17,   { fontSize: 5,  color: RED,  align: 'center' });
-    p.text('FIGHTING',         ML/MM + 12, 21,   { fontSize: 5,  color: RED,  align: 'center' });
-    p.text('BONS EN CHABLAIS', ML/MM + 12, 25,   { fontSize: 4,  color: DARK, align: 'center' });
+    // Texte centré dans le cercle
+    p.text('FULL',             LOGO_CX, LOGO_CY - 4.5, { fontSize: 7.5, color: RED,  align: 'center' });
+    p.text('FIGHTING',         LOGO_CX, LOGO_CY + 1.5, { fontSize: 7.5, color: RED,  align: 'center' });
+    p.text('BONS EN CHABLAIS', LOGO_CX, LOGO_CY + 6.5, { fontSize: 5,   color: DARK, align: 'center' });
 
-    const fx = ML/MM + 27;
+    const fx = ML/MM + LOGO_R * 2 + 5;   // texte header décalé après le logo
     p.text('American Full Fighting Bons en Chablais - FFK', fx, 9,    { fontSize: 7.5, color: [255, 247, 237] });
     p.text("Dossier d'Adhesion",                            fx, 17,   { fontSize: 15,  color: [255, 247, 237] });
     p.text(`Saison 2025-2026  .  ${submittedAt}`,           fx, 23,   { fontSize: 6.5, color: [220, 200, 180] });
