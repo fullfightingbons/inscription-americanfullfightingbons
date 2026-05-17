@@ -700,7 +700,9 @@ async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId)
                            },
                          ],
     }),
-  }).catch(() => {}); // non bloquant
+  }).catch((err) => {
+    console.error("[Brevo] Echec envoi email confirmation:", err?.message ?? String(err));
+  });
 }
 
 async function storeRegistrationPdf(env, registration, dossier, adherentId) {
