@@ -581,8 +581,6 @@ async function insertPassRegionJournal(db, adherentId, nom, prenom, totals, exer
   return piece;
 }
 
-// ─── Email de confirmation de paiement ───────────────────────────────────────
-
 // ─── Encodage base64 binaire (Cloudflare Workers — pas de btoa sur bytes > 127) ─
 
 function uint8ToBase64(bytes) {
@@ -620,15 +618,16 @@ function buildRegistrationPayload(registration, dossier, adherentId) {
     payment:       pay,
     computedTotals: {
       ...totals,
-      formulaLabel:    totals.formulaLabel    || dossier.practice?.formulaCode || "",
-        cotisation:      Number(totals.cotisation    || 0),
-        clothingTotal:   Number(totals.clothingTotal || 0),
-        newMemberKit:    Number(totals.newMemberKit  || 0),
-        passport:        Number(totals.passport      || 0),
-        passRegionAmount:Number(totals.passRegionAmount || 0),
-        total:           Number(registration.montant_total || totals.total || 0),
-        pricingTshirt:   Number(totals.pricingTshirt   || 25),
-        pricingPantalon: Number(totals.pricingPantalon || 10),
+      formulaLabel:     totals.formulaLabel    || dossier.practice?.formulaCode || "",
+      cotisation:       Number(totals.cotisation    || 0),
+      clothingTotal:    Number(totals.clothingTotal || 0),
+      newMemberKit:     Number(totals.newMemberKit  || 0),
+      passport:         Number(totals.passport      || 0),
+      passRegionAmount: Number(totals.passRegionAmount || 0),
+      total:            Number(registration.montant_total || totals.total || 0),
+      pricingTshirt:    Number(totals.pricingTshirt   || 25),
+      pricingPantalon:  Number(totals.pricingPantalon || 10),
+      certificateRequired: Boolean(totals.certificateRequired),
     },
   };
 }
