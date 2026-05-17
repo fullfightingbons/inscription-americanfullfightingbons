@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="description" content="Inscription en ligne au club American Full Fighting Bons en Chablais.">
 <title>American Full Fighting — Inscription en ligne</title>
+<link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=Cormorant+Garamond:wght@500;600;700&display=swap" rel="stylesheet">
@@ -319,6 +320,11 @@
                 <span>Code Pass Région à 4 chiffres</span>
                 <input id="passRegionCode" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" placeholder="Exemple : 1234">
                 <small>Le code à 4 chiffres est requis si le Pass Région est utilisé.</small>
+              </label>
+              <label class="field conditional" data-show-when="passRegion">
+              <span>Numéro de dossier Pass Région</span>
+              <input id="passRegionDossierNumber" inputmode="text" placeholder="Exemple : PR-2025-00123">
+              <small>Le numéro de dossier Pass Région est obligatoire si le Pass Région est utilisé.</small>
               </label>
               <label class="field conditional" data-show-when="proofNeeded">
                 <span>Justificatif tarif réduit</span>

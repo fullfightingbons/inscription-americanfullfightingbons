@@ -137,6 +137,7 @@ function applyDraft(data) {
   set('passRegionEnabled', data.passRegionEnabled);
   if (data.passRegionAmount) set('passRegionAmount', data.passRegionAmount);
   if (data.passRegionCode) set('passRegionCode', data.passRegionCode);
+  if (data.passRegionDossierNumber) set('passRegionDossierNumber', data.passRegionDossierNumber);
   // Mineurs
   if (data.legalLastName) set('legalLastName', data.legalLastName);
   if (data.legalFirstName) set('legalFirstName', data.legalFirstName);
@@ -219,6 +220,7 @@ function collectAllFields() {
     formulaCode: val('formulaCode'), passportEnabled: val('passportEnabled'),
     passRegionEnabled: val('passRegionEnabled'), passRegionAmount: val('passRegionAmount'),
     passRegionCode: val('passRegionCode'),
+    passRegionDossierNumber: val('passRegionDossierNumber'),
     legalLastName: val('legalLastName'), legalFirstName: val('legalFirstName'),
     legalRole: val('legalRole'), legalCity: val('legalCity'),
     legalSignedAt: val('legalSignedAt'), legalSignatureName: val('legalSignatureName'),
@@ -509,6 +511,7 @@ function validateStep(step) {
       if (val('passRegionEnabled') === 'true') {
         if (!val('passRegionAmount')) return 'Veuillez sélectionner le montant du Pass Région.';
         if (!/^\d{4}$/.test(val('passRegionCode'))) return 'Le code Pass Région doit contenir exactement 4 chiffres.';
+        if (!val('passRegionDossierNumber')) return 'Le numéro de dossier Pass Région est obligatoire.';
         const doc = g('passRegionDocument');
         if (!doc?.files?.length) return 'Le justificatif Pass Région est obligatoire.';
       }
@@ -756,6 +759,7 @@ function buildPayload() {
       passRegionEnabled: val('passRegionEnabled') === 'true',
       passRegionAmount: val('passRegionEnabled') === 'true' ? Number(val('passRegionAmount') || 0) : 0,
       passRegionCode: val('passRegionEnabled') === 'true' ? val('passRegionCode') : '',
+      passRegionDossierNumber: val('passRegionEnabled') === 'true' ? val('passRegionDossierNumber') : '',
     },
     health: {
       qsSport: qs,
