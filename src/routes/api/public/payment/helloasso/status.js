@@ -22,25 +22,7 @@ import {
   updateRegistrationPayment,
 } from "../../../../_lib/public-payments.js";
 import { generateAdherentPdf } from "../../../../_lib/pdf.js";
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function toBool(value) {
-  return value === true || value === "true" || value === "1" || value === 1 || value === "on";
-}
-
-function isMinor(birthDate) {
-  const now = new Date();
-  const birth = new Date(`${birthDate}T00:00:00`);
-  const age =
-  now.getFullYear() -
-  birth.getFullYear() -
-  (now.getMonth() < birth.getMonth() ||
-  (now.getMonth() === birth.getMonth() && now.getDate() < birth.getDate())
-  ? 1
-  : 0);
-  return age < 18;
-}
+import { isMinor, toBool } from "../../../../_lib/helpers.js";
 
 function getActiveExerciseDate(endDate) {
   if (endDate && /^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
