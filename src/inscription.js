@@ -6,6 +6,9 @@
  *  - Les erreurs internes ne sont plus exposées au client (message générique)
  *  - isMinor / calculateTotals / toBool importés depuis _lib/helpers.js
  *  - Timeout AbortSignal sur les appels HelloAsso et Brevo
+ *  - Téléphone secondaire optionnel (pratiquant et contact d'urgence)
+ *  - Regex email renforcée côté serveur
+ *  - Email de confirmation envoyé à l'adhérent après soumission
  */
 
 import { badRequest, json } from "../../_lib/data.js";
@@ -41,7 +44,10 @@ function requireDate(value, label) {
 
 function requireEmail(value) {
   const clean = requireText(value, "Email").toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) throw new Error("Email invalide");
+  // Regex plus stricte : un seul @, domaine avec au moins un point, TLD ≥ 2 chars
+  if (!/^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/.test(clean)) {
+    throw new Error("Email invalide");
+  }
   return clean;
 }
 
@@ -173,12 +179,12 @@ function validatePayload(payload) {
   requireText(contact.postalCode, "Code postal");
   requireText(contact.city,       "Ville");
   requireText(contact.phonePrimary,  "Téléphone principal");
-  requireText(contact.phoneSecondary,"Téléphone secondaire");
+  // phoneSecondary optionnel : on ne bloque pas si absent
   requireEmail(contact.email);
   requireText(emergency.lastName,  "Nom du contact d'urgence");
   requireText(emergency.firstName, "Prénom du contact d'urgence");
   requireText(emergency.phonePrimary,  "Téléphone principal du contact d'urgence");
-  requireText(emergency.phoneSecondary,"Téléphone secondaire du contact d'urgence");
+  // emergencyPhoneSecondary optionnel
   requireText(practice.typeInscription,"Type d'inscription");
   requireText(practice.practiceType,   "Type de pratique");
   requireText(practice.formulaCode,    "Formule tarifaire");
@@ -398,6 +404,78 @@ function buildEmailText(payload, totals, registrationId, helloAssoUrl) {
   ].join("\n");
 }
 
+// ─── Email de confirmation à l'adhérent ──────────────────────────────────────
+
+function buildConfirmationEmailHtml(payload, totals, registrationId) {
+  const identity = payload.identity || {};
+  const contact  = payload.contact  || {};
+  const practice = payload.practice || {};
+  const count    = normalizeInstallmentCount(payload.payment?.installmentCount);
+  return `
+  <html><body style="font-family:Arial,sans-serif;color:#20140f;max-width:600px">
+    <h2 style="color:#a23521">Votre inscription AFFBC a bien été reçue</h2>
+    <p>Bonjour ${escapeMime(identity.firstName)},</p>
+    <p>Nous avons bien reçu votre dossier d'inscription au club <strong>American Full Fighting Bons En Chablais</strong>.</p>
+    <p><strong>Référence :</strong> ${escapeMime(registrationId)}</p><hr>
+    <h3>Récapitulatif</h3>
+    <p><strong>Formule :</strong> ${escapeMime(practice.formulaCode)}</p>
+    <p><strong>Type :</strong> ${escapeMime(practice.typeInscription)}</p>
+    <p><strong>Montant total :</strong> ${totals.total.toFixed(2)} €</p>
+    <p><strong>Paiement :</strong> HelloAsso (${count} fois${count === 1 ? "" : " prévues"})</p>
+    <hr>
+    <p>Votre dossier sera validé après confirmation du paiement HelloAsso. Vous recevrez votre licence FFK une fois le dossier complet.</p>
+    <p>En cas de question : <a href="mailto:fullfightingbons@gmail.com">fullfightingbons@gmail.com</a></p>
+    <p style="color:#888;font-size:12px">American Full Fighting Bons En Chablais — 15 Place Henri Boucher, 74890 Bons En Chablais</p>
+  </body></html>`.trim();
+}
+
+function buildConfirmationEmailText(payload, totals, registrationId) {
+  const identity = payload.identity || {};
+  const practice = payload.practice || {};
+  const count    = normalizeInstallmentCount(payload.payment?.installmentCount);
+  return [
+    `Bonjour ${identity.firstName},`,
+    "",
+    "Nous avons bien reçu votre dossier d'inscription au club American Full Fighting Bons En Chablais.",
+    `Référence : ${registrationId}`,
+    "",
+    `Formule : ${practice.formulaCode}`,
+    `Type : ${practice.typeInscription}`,
+    `Montant total : ${totals.total.toFixed(2)} €`,
+    `Paiement : HelloAsso (${count} fois${count === 1 ? "" : " prévues"})`,
+    "",
+    "Votre dossier sera validé après confirmation du paiement HelloAsso.",
+    "En cas de question : fullfightingbons@gmail.com",
+  ].join("\n");
+}
+
+async function sendConfirmationEmail(env, payload, totals, registrationId) {
+  if (!env.BREVO_API_KEY) return { sent: false, reason: "brevo_api_key_missing" };
+  const adherentEmail = String(payload.contact?.email || "").trim().toLowerCase();
+  if (!adherentEmail) return { sent: false, reason: "no_adherent_email" };
+  const from    = env.SIGNUP_ALERT_FROM || "contact@americanfullfightingbons.fr";
+  const identity = payload.identity || {};
+  const subject  = "Confirmation de votre inscription AFFBC";
+
+  const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: { accept: "application/json", "content-type": "application/json", "api-key": env.BREVO_API_KEY },
+    body: JSON.stringify({
+      sender: { name: env.SIGNUP_ALERT_SENDER_NAME || "AFFBC Inscriptions", email: from },
+      to: [{ email: adherentEmail, name: `${escapeMime(identity.firstName)} ${escapeMime(identity.lastName)}`.trim() }],
+      subject,
+      htmlContent: buildConfirmationEmailHtml(payload, totals, registrationId),
+      textContent: buildConfirmationEmailText(payload, totals, registrationId),
+    }),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+  const result = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(result?.message || `brevo_http_${response.status}`);
+  return { sent: true, messageId: result?.messageId || null };
+}
+
+// ─── Email d'alerte club ──────────────────────────────────────────────────────
+
 async function sendSignupAlert(env, payload, totals, registrationId, helloAssoUrl) {
   if (!env.BREVO_API_KEY) return { sent: false, reason: "brevo_api_key_missing" };
   const to      = env.SIGNUP_ALERT_TO   || "fullfightingbons@gmail.com";
@@ -557,7 +635,7 @@ export async function onRequestPost(context) {
       `INSERT INTO inscriptions_publiques (${columns.map((c) => `"${c}"`).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
     ).bind(...columns.map((c) => row[c])).run();
 
-    // ── Email d'alerte ────────────────────────────────────────────────────────
+    // ── Email d'alerte club ───────────────────────────────────────────────────
     let emailAlertStatus = { sent: false, reason: "not_attempted" };
     try {
       emailAlertStatus = await sendSignupAlert(context.env, payload, totals, registrationId, helloAssoUrl);
@@ -565,12 +643,20 @@ export async function onRequestPost(context) {
       emailAlertStatus = { sent: false, reason: error.message || "send_failed" };
     }
 
+    // ── Email de confirmation à l'adhérent ────────────────────────────────────
+    let confirmationEmailStatus = { sent: false, reason: "not_attempted" };
+    try {
+      confirmationEmailStatus = await sendConfirmationEmail(context.env, payload, totals, registrationId);
+    } catch (error) {
+      confirmationEmailStatus = { sent: false, reason: error.message || "send_failed" };
+    }
+
     // ── Audit log ─────────────────────────────────────────────────────────────
     await writeAuditLog(context.env.DB, {
       action:     "public.inscription_submitted",
       entityType: "inscriptions_publiques",
       entityId:   registrationId,
-      details:    { email: row.email, total: totals.total, formula: row.formule_code, paymentMethod: "helloasso", helloAssoCheckoutIntentId, emailAlertStatus },
+      details:    { email: row.email, total: totals.total, formula: row.formule_code, paymentMethod: "helloasso", helloAssoCheckoutIntentId, emailAlertStatus, confirmationEmailStatus },
       ip:         getClientIp(context.request),
     }).catch(() => {});
 
