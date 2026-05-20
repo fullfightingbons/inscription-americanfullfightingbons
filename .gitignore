@@ -198,6 +198,9 @@ dist
 .dev.vars*
 !.dev.vars.example
 
+### Fichiers générés par wrangler — ne pas commiter ###
+worker-configuration.d.ts
+
 ### Sécurité — ne jamais committer ces fichiers ###
 *.pem
 *.key
