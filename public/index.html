@@ -228,8 +228,8 @@
                 <input id="phonePrimary" type="tel" inputmode="tel" autocomplete="tel" pattern="[0-9+][0-9 .]{8,14}" title="Numéro de téléphone valide (ex : 0612345678)" required>
               </label>
               <label class="field">
-                <span>Téléphone secondaire</span>
-                <input id="phoneSecondary" type="tel" inputmode="tel" autocomplete="tel-national" pattern="[0-9+][0-9 .]{8,14}" title="Numéro de téléphone valide (ex : 0612345678)" required placeholder="Répétez le même si besoin">
+                <span>Téléphone secondaire <span style="font-weight:400;font-size:12px;color:var(--muted)">(facultatif)</span></span>
+                <input id="phoneSecondary" type="tel" inputmode="tel" autocomplete="tel-national" pattern="[0-9+][0-9 .]{8,14}" title="Numéro de téléphone valide (ex : 0612345678)" placeholder="Répétez le principal si besoin">
               </label>
               <label class="field field-full">
                 <span>Email</span>
@@ -251,8 +251,8 @@
                 <input id="emergencyPhonePrimary" type="tel" inputmode="tel" autocomplete="tel" pattern="[0-9+][0-9 .]{8,14}" title="Numéro de téléphone valide (ex : 0612345678)" required>
               </label>
               <label class="field">
-                <span>Téléphone secondaire</span>
-                <input id="emergencyPhoneSecondary" type="tel" inputmode="tel" autocomplete="tel-national" pattern="[0-9+][0-9 .]{8,14}" title="Numéro de téléphone valide (ex : 0612345678)" required placeholder="Répétez le même si besoin">
+                <span>Téléphone secondaire <span style="font-weight:400;font-size:12px;color:var(--muted)">(facultatif)</span></span>
+                <input id="emergencyPhoneSecondary" type="tel" inputmode="tel" autocomplete="tel-national" pattern="[0-9+][0-9 .]{8,14}" title="Numéro de téléphone valide (ex : 0612345678)" placeholder="Répétez le principal si besoin">
               </label>
             </div>
             <div class="panel-actions">
@@ -543,9 +543,13 @@
                 <span>Date de signature</span>
                 <input id="consentSignedAt" type="date" required>
               </label>
-              <label class="field">
+              <label class="field" id="applicant-signature-field">
                 <span>Nom tapé pour signature du pratiquant</span>
                 <input id="applicantSignatureName" required>
+              </label>
+              <label class="field" id="legal-consent-signature-field" hidden>
+                <span>Nom tapé pour signature du représentant légal <small>(pratiquant mineur — le représentant légal signe le droit à l'image)</small></span>
+                <input id="legalConsentSignatureName">
               </label>
             </div>
             <div class="panel-actions">
@@ -624,5 +628,43 @@
     <a href="/mentions-legales" style="color:var(--muted);text-decoration:underline">Mentions légales &amp; politique de confidentialité</a>
   </footer>
   <script src="/assets/inscription.js" defer></script>
+  <script>
+    // Droit à l'image mineur : affiche le champ signature représentant légal
+    // quand la date de naissance indique un mineur (<18 ans)
+    function updateConsentSignatureFields() {
+      var birthDate = document.getElementById('birthDate');
+      var applicantField = document.getElementById('applicant-signature-field');
+      var legalField = document.getElementById('legal-consent-signature-field');
+      var legalInput = document.getElementById('legalConsentSignatureName');
+      var applicantInput = document.getElementById('applicantSignatureName');
+      if (!birthDate || !applicantField || !legalField) return;
+      var isMinor = false;
+      if (birthDate.value) {
+        var birth = new Date(birthDate.value + 'T00:00:00');
+        var now = new Date();
+        var age = now.getFullYear() - birth.getFullYear()
+          - ((now.getMonth() < birth.getMonth() || (now.getMonth() === birth.getMonth() && now.getDate() < birth.getDate())) ? 1 : 0);
+        isMinor = age < 18;
+      }
+      if (isMinor) {
+        applicantField.hidden = true;
+        applicantInput.removeAttribute('required');
+        legalField.hidden = false;
+        legalInput.setAttribute('required', '');
+      } else {
+        applicantField.hidden = false;
+        applicantInput.setAttribute('required', '');
+        legalField.hidden = true;
+        legalInput.removeAttribute('required');
+      }
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+      var birthDate = document.getElementById('birthDate');
+      if (birthDate) {
+        birthDate.addEventListener('change', updateConsentSignatureFields);
+        updateConsentSignatureFields();
+      }
+    });
+  </script>
 </body>
 </html>
