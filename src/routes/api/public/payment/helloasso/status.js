@@ -22,8 +22,7 @@ import {
   updateRegistrationPayment,
 } from "../../../../_lib/public-payments.js";
 import { generateAdherentPdf } from "../../../../_lib/pdf.js";
-import { isMinor, toBool } from "../../../../helpers.js";
-
+import { isMinor, toBool } from "../../../../_lib/helpers.js";
 function getActiveExerciseDate(endDate) {
   if (endDate && /^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
     return endDate;
