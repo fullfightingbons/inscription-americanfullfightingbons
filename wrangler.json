@@ -11,7 +11,8 @@
       "/",
       "/inscription",
       "/inscription-config",
-      "/api/*"
+      "/api/*",
+      "/mentions-legales"
     ]
   },
   "vars": {
@@ -22,7 +23,13 @@
     "SIGNUP_ALERT_TO_NAME": "AFFBC",
     "PAYMENT_CURRENCY": "EUR",
     "HELLOASSO_ORGANIZATION_SLUG": "american-full-fighting-bons-en-chablais",
-    "HELLOASSO_ENV": "production"
+    "HELLOASSO_ENV": "production",
+    "BANK_HOLDER": "",
+    "BANK_IBAN": "",
+    "BANK_BIC": "",
+    "BANK_NAME": "",
+    "BANK_ADDRESS": "",
+    "BANK_TRANSFER_LABEL": ""
   },
   "d1_databases": [
     {
