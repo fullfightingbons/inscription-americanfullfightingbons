@@ -13,7 +13,7 @@
 
 import { badRequest, json } from "../../_lib/data.js";
 import { getClientIp, writeAuditLog } from "../../_lib/audit.js";
-import { isMinor, calculateTotals, toBool, normalizeInstallmentCount } from "../../_lib/helpers.js";
+import { isMinor, calculateTotals, toBool, normalizeInstallmentCount } from "../../helpers.js";
 
 const MAX_FILE_SIZE = 8 * 1024 * 1024; // 8 Mo
 const FETCH_TIMEOUT_MS = 12_000; // 12 s pour les appels externes
