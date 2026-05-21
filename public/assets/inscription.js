@@ -631,13 +631,11 @@ function validateStep(step) {
       if (!val('postalCode')) return 'Le code postal est obligatoire.';
       if (!val('city')) return 'La ville est obligatoire.';
       if (!val('phonePrimary')) return 'Le téléphone principal est obligatoire.';
-      if (!val('phoneSecondary')) return 'Le téléphone secondaire est obligatoire.';
       if (!val('email')) return 'L\'email est obligatoire.';
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val('email'))) return 'L\'email semble invalide.';
       if (!val('emergencyLastName')) return 'Le nom du contact d\'urgence est obligatoire.';
       if (!val('emergencyFirstName')) return 'Le prénom du contact d\'urgence est obligatoire.';
       if (!val('emergencyPhonePrimary')) return 'Le téléphone principal du contact d\'urgence est obligatoire.';
-      if (!val('emergencyPhoneSecondary')) return 'Le téléphone secondaire du contact d\'urgence est obligatoire.';
       return null;
     }
     case 3: { // Pratique
