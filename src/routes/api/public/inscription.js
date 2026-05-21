@@ -14,6 +14,13 @@
 import { badRequest, json } from "../../_lib/data.js";
 import { getClientIp, writeAuditLog } from "../../_lib/audit.js";
 import { isMinor, calculateTotals, toBool, normalizeInstallmentCount } from "../../_lib/helpers.js";
+import {
+  assertAdditionalOrderItemsStock,
+  assertClothingOrderStock,
+  boutiqueStockRequestError,
+  fetchBoutiqueClothingStock,
+  fetchBoutiqueProducts,
+} from "../../_lib/boutique-stock.js";
 
 const MAX_FILE_SIZE = 8 * 1024 * 1024; // 8 Mo
 const FETCH_TIMEOUT_MS = 12_000; // 12 s pour les appels externes
@@ -134,7 +141,7 @@ function buildInstallmentPlan(totalCents, installmentCount) {
 // ─── Chargement des tarifs depuis D1 (source de vérité) ──────────────────────
 
 async function loadPricingFromDb(db) {
-  const DEFAULT = { base: 250, family: 200, pro: 125, cseThales: 39, bureau: 0, newMemberKit: 35, passport: 25, tshirt: 25, pantalon: 10 };
+  const DEFAULT = { base: 250, family: 200, pro: 125, cseThales: 39, bureau: 0, newMemberKit: 40, passport: 25, tshirt: 25, pantalon: 15 };
   try {
     const result = await db.prepare(`SELECT cle, valeur FROM club_info`).all();
     const info   = Object.fromEntries((result.results || []).map((r) => [r.cle, r.valeur]));
@@ -154,6 +161,47 @@ async function loadPricingFromDb(db) {
     };
   } catch {
     return DEFAULT;
+  }
+}
+
+async function loadOrderProductsFromDb(db, env) {
+  try {
+    const result = await db.prepare(`SELECT cle, valeur FROM club_info WHERE cle = 'inscription_order_products'`).all();
+    const raw = result?.results?.[0]?.valeur ? JSON.parse(result.results[0].valeur) : [];
+    const configuredProducts = Array.isArray(raw) ? raw : [];
+    let boutiqueProducts = [];
+    try {
+      boutiqueProducts = await fetchBoutiqueProducts(env);
+    } catch (error) {
+      console.warn("[inscription] Catalogue boutique indisponible:", error?.message ?? String(error));
+    }
+    const boutiqueById = new Map((boutiqueProducts || []).map((product) => [Number(product.productId), product]));
+    return configuredProducts
+      .filter((product) => product && product.active !== false)
+      .map((product) => {
+        const source = String(product.source || "gestion");
+        const boutiqueProductId = Number(product.boutiqueProductId || 0) || null;
+        const boutiqueProduct = source === "boutique" && boutiqueProductId
+          ? boutiqueById.get(boutiqueProductId)
+          : null;
+        return {
+          id: String(product.id || boutiqueProductId || crypto.randomUUID()),
+          source,
+          active: product.active !== false,
+          boutiqueProductId,
+          name: String(boutiqueProduct?.name || product.name || ""),
+          description: String(boutiqueProduct?.description || product.description || ""),
+          price: Number(boutiqueProduct?.price ?? product.price ?? 0),
+          requiresSize: Boolean(
+            product.requiresSize ||
+            (Array.isArray(boutiqueProduct?.sizes) && boutiqueProduct.sizes.length > 0),
+          ),
+          defaultQtyNew: Math.max(0, Number(product.defaultQtyNew || 0)),
+        };
+      })
+      .filter((product) => product.name && Number.isFinite(product.price));
+  } catch {
+    return [];
   }
 }
 
@@ -415,7 +463,7 @@ function buildConfirmationEmailHtml(payload, totals, registrationId) {
   <html><body style="font-family:Arial,sans-serif;color:#20140f;max-width:600px">
     <h2 style="color:#a23521">Votre inscription AFFBC a bien été reçue</h2>
     <p>Bonjour ${escapeMime(identity.firstName)},</p>
-    <p>Nous avons bien reçu votre dossier d'inscription au club <strong>American Full Fighting Bons En Chablais</strong>.</p>
+    <p>Nous avons bien reçu votre dossier d'inscription au club <strong>AMERICAN FULL FIGHTING BONS EN CHABLAIS</strong>.</p>
     <p><strong>Référence :</strong> ${escapeMime(registrationId)}</p><hr>
     <h3>Récapitulatif</h3>
     <p><strong>Formule :</strong> ${escapeMime(practice.formulaCode)}</p>
@@ -425,7 +473,7 @@ function buildConfirmationEmailHtml(payload, totals, registrationId) {
     <hr>
     <p>Votre dossier sera validé après confirmation du paiement HelloAsso. Vous recevrez votre licence FFK une fois le dossier complet.</p>
     <p>En cas de question : <a href="mailto:fullfightingbons@gmail.com">fullfightingbons@gmail.com</a></p>
-    <p style="color:#888;font-size:12px">American Full Fighting Bons En Chablais — 15 Place Henri Boucher, 74890 Bons En Chablais</p>
+    <p style="color:#888;font-size:12px">AMERICAN FULL FIGHTING BONS EN CHABLAIS — 15 Place Henri Boucher, 74890 Bons En Chablais</p>
   </body></html>`.trim();
 }
 
@@ -436,7 +484,7 @@ function buildConfirmationEmailText(payload, totals, registrationId) {
   return [
     `Bonjour ${identity.firstName},`,
     "",
-    "Nous avons bien reçu votre dossier d'inscription au club American Full Fighting Bons En Chablais.",
+    "Nous avons bien reçu votre dossier d'inscription au club AMERICAN FULL FIGHTING BONS EN CHABLAIS.",
     `Référence : ${registrationId}`,
     "",
     `Formule : ${practice.formulaCode}`,
@@ -481,14 +529,21 @@ async function sendSignupAlert(env, payload, totals, registrationId, helloAssoUr
   const to      = env.SIGNUP_ALERT_TO   || "fullfightingbons@gmail.com";
   const from    = env.SIGNUP_ALERT_FROM || "contact@americanfullfightingbons.fr";
   const identity = payload.identity || {};
+  const adherentEmail = String(payload.contact?.email || "").trim().toLowerCase();
   const subject  = `Nouvelle inscription AFFBC — ${escapeMime(identity.lastName)} ${escapeMime(identity.firstName)}`.trim();
+  const recipients = [
+    { email: to, name: env.SIGNUP_ALERT_TO_NAME || "AFFBC" },
+    adherentEmail
+      ? { email: adherentEmail, name: `${escapeMime(identity.firstName)} ${escapeMime(identity.lastName)}`.trim() || adherentEmail }
+      : null,
+  ].filter((entry, index, array) => entry && array.findIndex((item) => item?.email === entry.email) === index);
 
   const response = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json", "api-key": env.BREVO_API_KEY },
     body: JSON.stringify({
       sender: { name: env.SIGNUP_ALERT_SENDER_NAME || "AFFBC Inscriptions", email: from },
-      to: [{ email: to, name: env.SIGNUP_ALERT_TO_NAME || "AFFBC" }],
+      to: recipients,
       subject,
       htmlContent: buildEmailHtml(payload, totals, registrationId, helloAssoUrl),
       textContent: buildEmailText(payload, totals, registrationId, helloAssoUrl),
@@ -569,12 +624,24 @@ export async function onRequestPost(context) {
 
     // ── Calcul des totaux depuis D1 (jamais depuis payload.pricing) ──────────
     const serverPricing = await loadPricingFromDb(context.env.DB);
+    const extraProductCatalog = await loadOrderProductsFromDb(context.env.DB, context.env);
     const totals = calculateTotals(
       { ...payload.practice, passRegionAmount: payload.practice?.passRegionAmount },
       serverPricing,
       payload.clothingOrder,
+      payload.extraOrderItems,
+      extraProductCatalog,
     );
     totals.certificateRequired = validation.certificateRequired;
+
+    try {
+      const clothingStock = await fetchBoutiqueClothingStock(context.env);
+      assertClothingOrderStock(clothingStock, payload.clothingOrder);
+      const boutiqueProducts = await fetchBoutiqueProducts(context.env);
+      assertAdditionalOrderItemsStock(boutiqueProducts, totals.orderItems);
+    } catch (error) {
+      return boutiqueStockRequestError(error);
+    }
 
     // ── Upload des pièces justificatives ─────────────────────────────────────
     const registrationId    = crypto.randomUUID();

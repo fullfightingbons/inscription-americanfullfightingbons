@@ -23,6 +23,13 @@ import {
 } from "../../../../_lib/public-payments.js";
 import { generateAdherentPdf } from "../../../../_lib/pdf.js";
 import { isMinor, toBool } from "../../../../_lib/helpers.js";
+import {
+  buildAdditionalOrderSyncItems,
+  buildClothingSyncItems,
+  fetchBoutiqueClothingStock,
+  syncBoutiqueStock,
+} from "../../../../_lib/boutique-stock.js";
+
 function getActiveExerciseDate(endDate) {
   if (endDate && /^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
     return endDate;
@@ -35,17 +42,47 @@ function getActiveExerciseDate(endDate) {
 function toAmountCents(value) {
   const amount = Number(value || 0);
   if (!Number.isFinite(amount) || amount <= 0) return 0;
+  return Math.round(amount * 100);
+}
+
+function toHelloAssoAmountCents(value) {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
   return Number.isInteger(amount) ? amount : Math.round(amount * 100);
+}
+
+async function syncClothingStockIfNeeded(env, registrationId, dossier) {
+  const payment = dossier?.payment || {};
+  if (payment.clothingStockSyncedAt && payment.additionalOrderStockSyncedAt) {
+    return { synced: true, alreadySynced: true };
+  }
+  const clothingOrder = dossier?.clothingOrder || {};
+  const orderItems = Array.isArray(dossier?.computedTotals?.orderItems) ? dossier.computedTotals.orderItems : [];
+  const hasClothing = Number(clothingOrder.tshirtQty || 0) > 0 || Number(clothingOrder.pantalonQty || 0) > 0;
+  const hasAdditionalItems = orderItems.some((item) => Number(item?.quantity || 0) > 0 && String(item?.source || "") === "boutique");
+  if (!hasClothing && !hasAdditionalItems) {
+    return { synced: false, skipped: true };
+  }
+  const stock = hasClothing ? await fetchBoutiqueClothingStock(env) : { tshirt: null, pantalon: null };
+  const items = [
+    ...buildClothingSyncItems(stock, clothingOrder),
+    ...buildAdditionalOrderSyncItems(orderItems),
+  ];
+  if (!items.length) {
+    return { synced: false, skipped: true };
+  }
+  const result = await syncBoutiqueStock(env, `inscription:${registrationId}`, items);
+  return { synced: true, result };
 }
 
 function buildPaymentSnapshot(order, dossier, checkoutIntentId) {
   const installmentCount = Math.max(1, Math.min(3, Number(dossier?.payment?.installmentCount || 1)));
   const totalAmountCents = toAmountCents(dossier?.computedTotals?.total || 0);
   const payments = Array.isArray(order?.payments) ? order.payments.filter(Boolean) : [];
-  const paidAmountCents = payments.reduce((sum, payment) => sum + toAmountCents(payment?.amount), 0);
+  const paidAmountCents = payments.reduce((sum, payment) => sum + toHelloAssoAmountCents(payment?.amount), 0);
   const paidInstallments = Math.min(
     installmentCount,
-    payments.filter((payment) => toAmountCents(payment?.amount) > 0).length,
+    payments.filter((payment) => toHelloAssoAmountCents(payment?.amount) > 0).length,
   );
   const hasInitialPayment = Boolean(order?.id) && paidInstallments > 0;
   const fullyPaid = installmentCount === 1
@@ -238,6 +275,15 @@ async function insertInscriptionSales(db, registrationId, adherentId, nom, preno
       desc: "Pantalon club AFFBC",
       qte: totals.pantalonQty,
       pu: totals.pricingPantalon,
+    });
+  }
+  for (const item of totals.orderItems || []) {
+    if (Number(item.quantity || 0) <= 0) continue;
+    const sizeSuffix = item.size ? ` (${item.size})` : "";
+    lignes.push({
+      desc: `${item.name}${sizeSuffix}`,
+      qte: Number(item.quantity || 0),
+      pu: Number(item.unitPrice || 0),
     });
   }
 
@@ -463,7 +509,8 @@ async function insertVenteTenueJournal(db, factureId, nom, prenom, totals, exerc
   const clothingTotal = Number(totals.clothingTotal || 0);
   const newMemberKitTotal = Number(totals.newMemberKit || 0);
   const passportTotal = Number(totals.passport || 0);
-  const totalSales = clothingTotal + newMemberKitTotal + passportTotal;
+  const extraProductsTotal = Number(totals.extraProductsTotal || 0);
+  const totalSales = clothingTotal + newMemberKitTotal + passportTotal + extraProductsTotal;
   if (!factureId || !totalSales) return null;
   const now = new Date().toISOString();
   const dateOp = String(paidAt || now).slice(0, 10);
@@ -504,6 +551,16 @@ async function insertVenteTenueJournal(db, factureId, nom, prenom, totals, exerc
                  libelle: `${libelleBase} - Vente de Tenue`,
                  debit: 0,
                  credit: clothingTotal + newMemberKitTotal,
+    });
+  }
+  if (extraProductsTotal > 0) {
+    entries.push({
+      id: crypto.randomUUID(),
+                 ...common,
+                 compte: "707 - Ventes vêtements et équipements",
+                 libelle: `${libelleBase} - Produits additionnels`,
+                 debit: 0,
+                 credit: extraProductsTotal,
     });
   }
   if (passportTotal > 0) {
@@ -604,11 +661,13 @@ function buildRegistrationPayload(registration, dossier, adherentId) {
       clothingTotal:    Number(totals.clothingTotal || 0),
       newMemberKit:     Number(totals.newMemberKit  || 0),
       passport:         Number(totals.passport      || 0),
+      extraProductsTotal: Number(totals.extraProductsTotal || 0),
       passRegionAmount: Number(totals.passRegionAmount || 0),
       total:            Number(registration.montant_total || totals.total || 0),
       pricingTshirt:    Number(totals.pricingTshirt   || 25),
-      pricingPantalon:  Number(totals.pricingPantalon || 10),
+      pricingPantalon:  Number(totals.pricingPantalon || 15),
       certificateRequired: Boolean(totals.certificateRequired),
+      orderItems: Array.isArray(totals.orderItems) ? totals.orderItems : [],
     },
   };
 }
@@ -770,6 +829,7 @@ export async function onRequestGet(context) {
     }
 
     if (registration.adherent_id) {
+      const stockSync = await syncClothingStockIfNeeded(context.env, registrationId, dossier);
       const exercise =
       (registration.exercice_id
       ? await context.env.DB.prepare(`SELECT * FROM exercices WHERE id = ? LIMIT 1`).bind(registration.exercice_id).first()
@@ -803,6 +863,8 @@ export async function onRequestGet(context) {
           helloAssoOrderId: order?.id || null,
           helloAssoOrder: order,
           helloAssoState: paymentSnapshot.fullyPaid ? "paid" : "scheduled",
+          clothingStockSyncedAt: stockSync.synced ? new Date().toISOString() : (dossier?.payment?.clothingStockSyncedAt || null),
+          additionalOrderStockSyncedAt: stockSync.synced ? new Date().toISOString() : (dossier?.payment?.additionalOrderStockSyncedAt || null),
           paidAt: paymentSnapshot.hasInitialPayment ? paidAt : null,
           installmentCount: paymentSnapshot.installmentCount,
           paidInstallments: paymentSnapshot.paidInstallments,
@@ -839,7 +901,12 @@ export async function onRequestGet(context) {
 
     // ── Création de la vente tenue (si commande) ──────────────────────────────
     let factureId = null;
-    const hasSales = Number(totals.passport || 0) > 0 || Number(totals.newMemberKit || 0) > 0 || (totals.tshirtQty > 0) || (totals.pantalonQty > 0);
+    const hasSales =
+      Number(totals.passport || 0) > 0 ||
+      Number(totals.newMemberKit || 0) > 0 ||
+      Number(totals.extraProductsTotal || 0) > 0 ||
+      (totals.tshirtQty > 0) ||
+      (totals.pantalonQty > 0);
     if (hasSales) {
       const contact = dossier.contact || {};
       const adresse = [contact.address1, contact.address2, contact.postalCode, contact.city]
@@ -856,6 +923,8 @@ export async function onRequestGet(context) {
         exercise,
       );
     }
+
+    const stockSync = await syncClothingStockIfNeeded(context.env, registrationId, dossier);
 
     await insertCotisationJournal(
       context.env.DB,
@@ -920,6 +989,8 @@ export async function onRequestGet(context) {
         helloAssoOrderId: order?.id || null,
         helloAssoOrder: order,
         helloAssoState: paymentSnapshot.fullyPaid ? "paid" : "scheduled",
+        clothingStockSyncedAt: stockSync.synced ? new Date().toISOString() : null,
+        additionalOrderStockSyncedAt: stockSync.synced ? new Date().toISOString() : null,
         paidAt: paymentSnapshot.hasInitialPayment ? paidAt : null,
         installmentCount: paymentSnapshot.installmentCount,
         paidInstallments: paymentSnapshot.paidInstallments,

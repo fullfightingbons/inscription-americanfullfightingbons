@@ -170,6 +170,14 @@ function applyDraft(data) {
     const el = document.querySelector('#clothing-order select[data-size-item="pantalon"]');
     if (el) el.value = data.pantalonSize;
   }
+  if (Array.isArray(data.extraOrderItems)) {
+    data.extraOrderItems.forEach((item) => {
+      const qtyEl = document.querySelector(`#clothing-order input[data-order-item="${item.id}"]`);
+      const sizeEl = document.querySelector(`#clothing-order select[data-order-size-item="${item.id}"]`);
+      if (qtyEl && item.quantity !== undefined) qtyEl.value = item.quantity;
+      if (sizeEl && item.size) sizeEl.value = item.size;
+    });
+  }
   // Engagements
   set('rulesAccepted', data.rulesAccepted); set('insuranceAcknowledged', data.insuranceAcknowledged);
   set('imageRights', data.imageRights);
@@ -207,6 +215,87 @@ function collectClothing() {
   };
 }
 
+function getOrderProducts() {
+  return Array.isArray(CONFIG?.orderProducts) ? CONFIG.orderProducts : [];
+}
+
+function getOrderProductById(productId) {
+  return getOrderProducts().find((product) => String(product.id) === String(productId)) || null;
+}
+
+function getOrderProductSizeStock(productId, size) {
+  const product = getOrderProductById(productId);
+  if (!product || !size) return null;
+  return Number(product.stockBySize?.[String(size).toUpperCase()] ?? 0);
+}
+
+function collectExtraOrderItems() {
+  return getOrderProducts().map((product) => {
+    const qtyEl = document.querySelector(`#clothing-order input[data-order-item="${product.id}"]`);
+    const sizeEl = document.querySelector(`#clothing-order select[data-order-size-item="${product.id}"]`);
+    return {
+      id: String(product.id),
+      quantity: Math.max(0, parseInt(qtyEl?.value || '0', 10)),
+      size: sizeEl?.value || '',
+    };
+  });
+}
+
+function getClothingStockEntry(kind) {
+  return CONFIG?.clothingStock?.[kind] || null;
+}
+
+function getClothingSizeOptions(kind) {
+  const entry = getClothingStockEntry(kind);
+  if (entry?.sizes?.length) return entry.sizes;
+  return ['XS', 'S', 'M', 'L', 'XL'];
+}
+
+function getClothingSizeStock(kind, size) {
+  const entry = getClothingStockEntry(kind);
+  if (!entry || !size) return null;
+  return Number(entry.stockBySize?.[String(size).toUpperCase()] ?? 0);
+}
+
+function updateClothingAvailability() {
+  const clothing = collectClothing();
+  ['tshirt', 'pantalon'].forEach((kind) => {
+    const qtyEl = document.querySelector(`#clothing-order input[data-item="${kind}"]`);
+    const size = clothing[`${kind}Size`];
+    const available = getClothingSizeStock(kind, size);
+    const hint = g(`${kind}-stock-hint`);
+    if (qtyEl) {
+      const max = available == null ? 5 : Math.max(0, available);
+      qtyEl.max = String(max);
+      if (Number(qtyEl.value || 0) > max) qtyEl.value = String(max);
+    }
+    if (hint) {
+      if (!size) hint.textContent = 'Choisissez une taille pour voir le stock.';
+      else if (available == null) hint.textContent = 'Stock boutique indisponible pour le moment.';
+      else if (available <= 0) hint.textContent = 'Rupture sur cette taille.';
+      else hint.textContent = `Stock disponible: ${available}`;
+    }
+  });
+  getOrderProducts().forEach((product) => {
+    const qtyEl = document.querySelector(`#clothing-order input[data-order-item="${product.id}"]`);
+    const sizeEl = document.querySelector(`#clothing-order select[data-order-size-item="${product.id}"]`);
+    const hint = g(`order-stock-hint-${product.id}`);
+    const size = sizeEl?.value || '';
+    const available = product.requiresSize ? getOrderProductSizeStock(product.id, size) : (product.stock == null ? null : Number(product.stock));
+    if (qtyEl) {
+      const max = available == null ? 10 : Math.max(0, available);
+      qtyEl.max = String(max);
+      if (Number(qtyEl.value || 0) > max) qtyEl.value = String(max);
+    }
+    if (hint) {
+      if (product.requiresSize && !size) hint.textContent = 'Choisissez une taille pour voir le stock.';
+      else if (available == null) hint.textContent = product.source === 'boutique' ? 'Stock boutique indisponible pour le moment.' : 'Stock non limité.';
+      else if (available <= 0) hint.textContent = product.requiresSize ? 'Rupture sur cette taille.' : 'Rupture de stock.';
+      else hint.textContent = `Stock disponible: ${available}`;
+    }
+  });
+}
+
 function collectAllFields() {
   return {
     lastName: val('lastName'), firstName: val('firstName'),
@@ -227,6 +316,7 @@ function collectAllFields() {
     legalSignedAt: val('legalSignedAt'), legalSignatureName: val('legalSignatureName'),
     qsSport: collectQs(),
     ...collectClothing(),
+    extraOrderItems: collectExtraOrderItems(),
     rulesAccepted: checked('rulesAccepted'), insuranceAcknowledged: checked('insuranceAcknowledged'),
     imageRights: val('imageRights'),
     consentSignedAt: val('consentSignedAt'), applicantSignatureName: val('applicantSignatureName'),
@@ -269,9 +359,42 @@ function calculateTotals() {
   const passport = passportEnabled ? p.passport : 0;
   const newMemberKit = p.newMemberKit || 0;
   const clothingTotal = tshirtQty * p.tshirt + pantalonQty * p.pantalon;
-  const total = cotisation + passport + clothingTotal + newMemberKit;
+  const requestedItems = collectExtraOrderItems();
+  const orderItems = getOrderProducts().map((product) => {
+    const requested = requestedItems.find((item) => String(item.id) === String(product.id)) || {};
+    const quantity = Math.max(
+      Number(requested.quantity || 0),
+      typeInscription === 'nouvelle' ? Number(product.defaultQtyNew || 0) : 0,
+    );
+    const unitPrice = Number(product.price || 0);
+    return {
+      id: String(product.id),
+      source: String(product.source || 'gestion'),
+      boutiqueProductId: product.boutiqueProductId ? Number(product.boutiqueProductId) : null,
+      name: String(product.name || ''),
+      description: String(product.description || ''),
+      requiresSize: Boolean(product.requiresSize),
+      quantity,
+      size: String(requested.size || ''),
+      unitPrice,
+      total: quantity * unitPrice,
+    };
+  }).filter((item) => item.quantity > 0);
+  const extraProductsTotal = orderItems.reduce((sum, item) => sum + Number(item.total || 0), 0);
+  const total = cotisation + passport + clothingTotal + newMemberKit + extraProductsTotal;
 
-  return { cotisation, passRegionAmount, passport, clothingTotal, tshirtQty, pantalonQty, newMemberKit, total };
+  return {
+    cotisation,
+    passRegionAmount,
+    passport,
+    clothingTotal,
+    tshirtQty,
+    pantalonQty,
+    newMemberKit,
+    extraProductsTotal,
+    orderItems,
+    total,
+  };
 }
 
 function getBureauOptionLabel() {
@@ -391,6 +514,14 @@ function updateSummary() {
   const clothing = collectClothing();
   const tshirtLabel = `${totals?.tshirtQty || 0} t-shirt${clothing.tshirtSize ? ` (${clothing.tshirtSize})` : ''}`;
   const pantalonLabel = `${totals?.pantalonQty || 0} pantalon${clothing.pantalonSize ? ` (${clothing.pantalonSize})` : ''}`;
+  const extraItemsSummary = (totals?.orderItems || []).map((item) => {
+    const sizeSuffix = item.size ? ` (${item.size})` : '';
+    return `<div class="summary-line"><strong>${item.name}</strong><span>${item.total.toFixed(2)} € · ${item.quantity}${sizeSuffix}</span></div>`;
+  }).join('');
+  const extraItemsPayment = (totals?.orderItems || []).map((item) => {
+    const sizeSuffix = item.size ? ` (${item.size})` : '';
+    return `<div class="bank-line"><strong>${item.name}${sizeSuffix}</strong><code>${item.total.toFixed(2)} €</code></div>`;
+  }).join('');
 
   if (!totals) {
     if (qk) qk.innerHTML = '<div class="summary-line"><span>Complétez les étapes pour voir le récapitulatif.</span></div>';
@@ -407,6 +538,7 @@ function updateSummary() {
       ${totals.passRegionAmount > 0 ? `<div class="summary-line"><strong>Remise Pass Région</strong><span>− ${totals.passRegionAmount.toFixed(2)} €</span></div>` : ''}
       ${totals.passport > 0 ? `<div class="summary-line"><strong>Passeport sportif</strong><span>${totals.passport.toFixed(2)} €</span></div>` : ''}
       ${totals.clothingTotal > 0 ? `<div class="summary-line"><strong>Tenue club</strong><span>${totals.clothingTotal.toFixed(2)} € · ${tshirtLabel} · ${pantalonLabel}</span></div>` : ''}
+      ${extraItemsSummary}
       <div class="summary-line"><strong>Total</strong><span style="font-size:18px;color:var(--red-dark)"><strong>${totals.total.toFixed(2)} €</strong></span></div>
       <div class="summary-line"><strong>Paiement</strong><span>${getInstallmentLabel()}</span></div>
     `;
@@ -419,6 +551,7 @@ function updateSummary() {
       ${totals.passRegionAmount > 0 ? `<div class="bank-line"><strong>Remise Pass Région</strong><code>− ${totals.passRegionAmount.toFixed(2)} €</code></div>` : ''}
       ${totals.passport > 0 ? `<div class="bank-line"><strong>Passeport sportif</strong><code>${totals.passport.toFixed(2)} €</code></div>` : ''}
       ${totals.clothingTotal > 0 ? `<div class="bank-line"><strong>Tenue club (${tshirtLabel} · ${pantalonLabel})</strong><code>${totals.clothingTotal.toFixed(2)} €</code></div>` : ''}
+      ${extraItemsPayment}
       <div class="bank-line" style="border-color:rgba(162,53,33,.35)"><strong>Total à régler</strong><code style="font-size:18px">${totals.total.toFixed(2)} €</code></div>
       <div class="bank-line"><strong>Paiement</strong><code>${getInstallmentLabel()}</code></div>
       <div class="bank-line"><strong>Échéancier</strong><code>${formatInstallmentSchedule(totals.total)}</code></div>
@@ -431,6 +564,7 @@ function updateSummary() {
   }
 
   updateClothingSubtotals(totals);
+  updateClothingAvailability();
   if (pi) show('online-payment-info', true);
 }
 
@@ -553,6 +687,23 @@ function validateStep(step) {
       const clothing = collectClothing();
       if (clothing.tshirtQty > 0 && !clothing.tshirtSize) return 'Veuillez sélectionner une taille de t-shirt.';
       if (clothing.pantalonQty > 0 && !clothing.pantalonSize) return 'Veuillez sélectionner une taille de pantalon.';
+      const tshirtAvailable = getClothingSizeStock('tshirt', clothing.tshirtSize);
+      const pantalonAvailable = getClothingSizeStock('pantalon', clothing.pantalonSize);
+      if (tshirtAvailable != null && clothing.tshirtQty > tshirtAvailable) return `Stock insuffisant pour le t-shirt en taille ${clothing.tshirtSize}.`;
+      if (pantalonAvailable != null && clothing.pantalonQty > pantalonAvailable) return `Stock insuffisant pour le pantalon en taille ${clothing.pantalonSize}.`;
+      for (const item of collectExtraOrderItems()) {
+        const product = getOrderProductById(item.id);
+        if (!product || item.quantity <= 0) continue;
+        if (product.requiresSize && !item.size) return `Veuillez sélectionner une taille pour ${product.name}.`;
+        const available = product.requiresSize
+          ? getOrderProductSizeStock(item.id, item.size)
+          : (product.stock == null ? null : Number(product.stock));
+        if (available != null && item.quantity > available) {
+          return product.requiresSize
+            ? `Stock insuffisant pour ${product.name} en taille ${item.size}.`
+            : `Stock insuffisant pour ${product.name}.`;
+        }
+      }
       return null;
     }
     case 6: { // Engagements
@@ -603,9 +754,56 @@ function renderClothingOrder() {
   const el = g('clothing-order');
   if (!el || !CONFIG) return;
   const p = CONFIG.pricing;
-  const sizeOptions = ['XS', 'S', 'M', 'L', 'XL']
-    .map(size => `<option value="${size}">${size}</option>`)
-    .join('');
+  const typeInscription = val('typeInscription');
+  const tshirtOptions = getClothingSizeOptions('tshirt').map(size => {
+    const stock = getClothingSizeStock('tshirt', size);
+    const disabled = stock != null && stock <= 0;
+    const suffix = stock == null ? '' : ` · ${stock} dispo`;
+    return `<option value="${size}" ${disabled ? 'disabled' : ''}>${size}${suffix}</option>`;
+  }).join('');
+  const pantalonOptions = getClothingSizeOptions('pantalon').map(size => {
+    const stock = getClothingSizeStock('pantalon', size);
+    const disabled = stock != null && stock <= 0;
+    const suffix = stock == null ? '' : ` · ${stock} dispo`;
+    return `<option value="${size}" ${disabled ? 'disabled' : ''}>${size}${suffix}</option>`;
+  }).join('');
+  const tshirtTotalStock = getClothingStockEntry('tshirt')?.stock;
+  const pantalonTotalStock = getClothingStockEntry('pantalon')?.stock;
+  const extraRows = getOrderProducts().map((product) => {
+    const sizeOptions = (Array.isArray(product.sizes) ? product.sizes : []).map((size) => {
+      const stock = getOrderProductSizeStock(product.id, size);
+      const disabled = stock != null && stock <= 0;
+      const suffix = stock == null ? '' : ` · ${stock} dispo`;
+      return `<option value="${size}" ${disabled ? 'disabled' : ''}>${size}${suffix}</option>`;
+    }).join('');
+    const stockHint = product.source === 'boutique'
+      ? (product.requiresSize
+          ? 'Choisissez une taille pour voir le stock.'
+          : (product.stock == null ? 'Stock boutique indisponible.' : `Stock total boutique: ${product.stock}`))
+      : 'Produit ajouté depuis le logiciel de gestion.';
+    const defaultQty = typeInscription === 'nouvelle' ? Number(product.defaultQtyNew || 0) : 0;
+    return `
+    <div class="order-row">
+      <div>
+        <strong>${product.name}</strong>
+        <small>${product.description || (product.source === 'boutique' ? 'Produit synchronisé depuis la boutique.' : 'Produit ajouté par le club.')}</small>
+        <small id="order-stock-hint-${product.id}">${stockHint}</small>
+      </div>
+      <div class="order-input"><span>${Number(product.price || 0).toFixed(2)} €</span></div>
+      <div class="order-input">
+        ${product.requiresSize ? `
+        <select data-order-size-item="${product.id}">
+          <option value="">Taille</option>
+          ${sizeOptions}
+        </select>
+        ` : '<span style="color:var(--muted)">—</span>'}
+      </div>
+      <div class="order-input">
+        <input type="number" min="0" max="10" value="${defaultQty}" data-order-item="${product.id}" style="width:60px" oninput="updateSummary()">
+      </div>
+      <div class="order-input" data-order-subtotal="${product.id}">—</div>
+    </div>`;
+  }).join('');
   el.innerHTML = `
     <div class="order-head">
       <span>Article</span><span>P.U.</span><span>Taille</span><span>Qté</span><span>Sous-total</span>
@@ -614,16 +812,17 @@ function renderClothingOrder() {
       <div>
         <strong>T-shirt club AFFBC</strong>
         <small>Tenue officielle noire validée</small>
+        <small id="tshirt-stock-hint">${tshirtTotalStock == null ? 'Stock boutique indisponible.' : `Stock total boutique: ${tshirtTotalStock}`}</small>
       </div>
       <div class="order-input"><span>${p.tshirt.toFixed(2)} €</span></div>
       <div class="order-input">
         <select data-size-item="tshirt">
           <option value="">Taille</option>
-          ${sizeOptions}
+          ${tshirtOptions}
         </select>
       </div>
       <div class="order-input">
-        <input type="number" min="0" max="5" value="${val('typeInscription') === 'nouvelle' ? 1 : 0}"
+        <input type="number" min="0" max="5" value="${typeInscription === 'nouvelle' ? 1 : 0}"
                data-item="tshirt" style="width:60px"
                oninput="updateSummary()">
       </div>
@@ -633,26 +832,35 @@ function renderClothingOrder() {
       <div>
         <strong>Pantalon club AFFBC</strong>
         <small>Pantalon de boxe noir</small>
+        <small id="pantalon-stock-hint">${pantalonTotalStock == null ? 'Stock boutique indisponible.' : `Stock total boutique: ${pantalonTotalStock}`}</small>
       </div>
       <div class="order-input"><span>${p.pantalon.toFixed(2)} €</span></div>
       <div class="order-input">
         <select data-size-item="pantalon">
           <option value="">Taille</option>
-          ${sizeOptions}
+          ${pantalonOptions}
         </select>
       </div>
       <div class="order-input">
-        <input type="number" min="0" max="5" value="${val('typeInscription') === 'nouvelle' ? 1 : 0}"
+        <input type="number" min="0" max="5" value="${typeInscription === 'nouvelle' ? 1 : 0}"
                data-item="pantalon" style="width:60px"
                oninput="updateSummary()">
       </div>
       <div class="order-input" id="pantalon-subtotal">—</div>
     </div>
+    ${extraRows}
   `;
   const tshirtSizeEl = el.querySelector('select[data-size-item="tshirt"]');
   const pantalonSizeEl = el.querySelector('select[data-size-item="pantalon"]');
   if (tshirtSizeEl) tshirtSizeEl.addEventListener('change', updateSummary);
   if (pantalonSizeEl) pantalonSizeEl.addEventListener('change', updateSummary);
+  const tshirtQtyEl = el.querySelector('input[data-item="tshirt"]');
+  const pantalonQtyEl = el.querySelector('input[data-item="pantalon"]');
+  if (tshirtQtyEl) tshirtQtyEl.addEventListener('input', updateClothingAvailability);
+  if (pantalonQtyEl) pantalonQtyEl.addEventListener('input', updateClothingAvailability);
+  el.querySelectorAll('input[data-order-item]').forEach((input) => input.addEventListener('input', updateClothingAvailability));
+  el.querySelectorAll('select[data-order-size-item]').forEach((select) => select.addEventListener('change', updateSummary));
+  updateClothingAvailability();
   updateClothingSubtotals();
 }
 
@@ -662,6 +870,16 @@ function updateClothingSubtotals(totals = calculateTotals()) {
   const pantalonSubtotal = g('pantalon-subtotal');
   if (tshirtSubtotal) tshirtSubtotal.textContent = `${(totals.tshirtQty * CONFIG.pricing.tshirt).toFixed(2)} €`;
   if (pantalonSubtotal) pantalonSubtotal.textContent = `${(totals.pantalonQty * CONFIG.pricing.pantalon).toFixed(2)} €`;
+  (totals.orderItems || []).forEach((item) => {
+    const el = document.querySelector(`[data-order-subtotal="${item.id}"]`);
+    if (el) el.textContent = `${Number(item.total || 0).toFixed(2)} €`;
+  });
+  getOrderProducts()
+    .filter((product) => !(totals.orderItems || []).some((item) => String(item.id) === String(product.id)))
+    .forEach((product) => {
+      const el = document.querySelector(`[data-order-subtotal="${product.id}"]`);
+      if (el) el.textContent = '0.00 €';
+    });
 }
 
 // ─── Config du club ───────────────────────────────────────────────────────────
@@ -676,15 +894,17 @@ async function loadConfig() {
   } catch (e) {
     // Config par défaut si l'API est indisponible
     CONFIG = {
-      clubName: 'American Full Fighting Bons en Chablais',
+      clubName: 'AMERICAN FULL FIGHTING BONS EN CHABLAIS',
       clubEmail: 'fullfightingbons@gmail.com',
       clubPhone: '06 99 95 81 77',
       clubLogo: '',
       dojoAddress: 'Centre Sportif Intercommunal des Voirons, 146 rue du Châtelard, 74890 Bons en Chablais',
       schedule: ['Lundi 19h–20h30', 'Mercredi 20h30–22h30', 'Vendredi 20h30–22h30'],
-      pricing: { base: 250, family: 200, pro: 125, cseThales: 39, bureau: 0, newMemberKit: 35, passport: 25, passRegionMale: 30, passRegionFemale: 60, tshirt: 25, pantalon: 10 },
+      pricing: { base: 250, family: 200, pro: 125, cseThales: 39, bureau: 0, newMemberKit: 40, passport: 25, passRegionMale: 30, passRegionFemale: 60, tshirt: 25, pantalon: 15 },
       bank: {},
       paymentProviders: { helloAssoEnabled: true },
+      clothingStock: { tshirt: null, pantalon: null },
+      orderProducts: [],
     };
     applyBranding();
   }
@@ -721,6 +941,7 @@ function buildPayload() {
   const qs = collectQs();
   const minor = isMinor(val('birthDate'));
   const clothing = collectClothing();
+  const extraOrderItems = collectExtraOrderItems();
   const typeInscription = val('typeInscription');
   const tshirtQty = Math.max(clothing.tshirtQty, typeInscription === 'nouvelle' ? 1 : 0);
   const pantalonQty = Math.max(clothing.pantalonQty, typeInscription === 'nouvelle' ? 1 : 0);
@@ -774,6 +995,7 @@ function buildPayload() {
       tshirtSize: clothing.tshirtSize,
       pantalonSize: clothing.pantalonSize,
     },
+    extraOrderItems,
     consents: {
       rulesAccepted: checked('rulesAccepted'),
       insuranceAcknowledged: checked('insuranceAcknowledged'),

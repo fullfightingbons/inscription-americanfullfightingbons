@@ -28,7 +28,7 @@ export function normalizeInstallmentCount(value) {
  * @param {object} clothing  – commande de tenue du payload
  * @returns {object} totaux
  */
-export function calculateTotals(practice, pricing, clothing = {}) {
+export function calculateTotals(practice, pricing, clothing = {}, extraOrderItems = [], extraProductCatalog = []) {
   const formula        = practice.formulaCode;
   const typeInscription = practice.typeInscription;
   const passRegionEnabled = toBool(practice.passRegionEnabled);
@@ -72,8 +72,40 @@ export function calculateTotals(practice, pricing, clothing = {}) {
   const newMemberKit    = Number(pricing.newMemberKit || 0);
   const passport        = passportEnabled ? Number(pricing.passport || 25) : 0;
   const pricingTshirt   = Number(pricing.tshirt   || 25);
-  const pricingPantalon = Number(pricing.pantalon || 10);
+  const pricingPantalon = Number(pricing.pantalon || 15);
   const clothingTotal   = tshirtQty * pricingTshirt + pantalonQty * pricingPantalon;
+  const requestedItems = Array.isArray(extraOrderItems) ? extraOrderItems : [];
+  const catalog = Array.isArray(extraProductCatalog) ? extraProductCatalog : [];
+  const requestedById = new Map(
+    requestedItems
+      .filter((item) => item?.id)
+      .map((item) => [String(item.id), item]),
+  );
+  const orderItems = catalog
+    .filter((product) => product && product.active !== false)
+    .map((product) => {
+      const requested = requestedById.get(String(product.id)) || {};
+      const defaultQtyNew = Number(product.defaultQtyNew || 0);
+      const quantity = Math.max(
+        Number(requested.quantity || 0),
+        typeInscription === "nouvelle" ? defaultQtyNew : 0,
+      );
+      const unitPrice = Number(product.price || 0);
+      return {
+        id: String(product.id),
+        source: String(product.source || "gestion"),
+        name: String(product.name || ""),
+        description: String(product.description || ""),
+        quantity,
+        unitPrice,
+        size: String(requested.size || ""),
+        requiresSize: Boolean(product.requiresSize),
+        boutiqueProductId: product.boutiqueProductId ? Number(product.boutiqueProductId) : null,
+        total: quantity * unitPrice,
+      };
+    })
+    .filter((item) => item.quantity > 0);
+  const extraProductsTotal = orderItems.reduce((sum, item) => sum + Number(item.total || 0), 0);
 
   return {
     cotisation,
@@ -81,11 +113,13 @@ export function calculateTotals(practice, pricing, clothing = {}) {
     newMemberKit,
     passport,
     clothingTotal,
+    extraProductsTotal,
     tshirtQty,
     pantalonQty,
     pricingTshirt,
     pricingPantalon,
-    total: cotisation + newMemberKit + passport + clothingTotal,
+    orderItems,
+    total: cotisation + newMemberKit + passport + clothingTotal + extraProductsTotal,
     formulaLabel: formulaLabelMap[formula] || formula,
   };
 }

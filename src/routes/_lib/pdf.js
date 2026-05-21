@@ -242,10 +242,12 @@ export function generateAdherentPdf(registration) {
     const totals= registration.computedTotals  || {};
     const pay   = registration.payment         || {};
     const qs    = hl.qsSport                   || {};
+    const orderItems = Array.isArray(totals.orderItems) ? totals.orderItems : [];
 
     const formulaLabel = totals.formulaLabel || pr.formulaCode || 'Tarif de base';
     const cotisation   = Number(totals.cotisation   || 0);
     const clothingTotal= Number(totals.clothingTotal || 0);
+    const extraProductsTotal = Number(totals.extraProductsTotal || 0);
     const total        = Number(totals.total         || 0);
     const installments = Math.max(1, Math.min(3, Number(pay.installmentCount || pr.installmentCount || 1)));
     const ref          = String(registration.id || 'AFFBC-XXXX').slice(0, 36);
@@ -267,7 +269,7 @@ export function generateAdherentPdf(registration) {
         const fy = PAGE_H_MM - FOOTER_H_MM;
         p.setFillRgb(NAVY);
         p.rect(0, fy, 210, FOOTER_H_MM, 'f');
-        p.text('AFFBC - American Full Fighting Bons en Chablais',
+        p.text('AMERICAN FULL FIGHTING BONS EN CHABLAIS',
                ML/MM, fy + 5.5, { fontSize: 7, color: WHITE });
         p.text('fullfightingbons@gmail.com  .  06 99 95 81 77  .  inscription.americanfullfightingbons.fr',
                ML/MM, fy + 10, { fontSize: 6, color: [180, 180, 180] });
@@ -332,7 +334,7 @@ export function generateAdherentPdf(registration) {
     p.rect(0, 0, 210, 1.5, 'f');
     p.rect(0, 1.5, 210, 36, 'f');
 
-    // Logo : cercle blanc avec contour rouge, texte FULL FIGHTING BONS EN CHABLAIS
+    // Logo : cercle blanc avec contour rouge, texte stylise du club
     const LOGO_CX  = ML/MM + 17;   // centre X du logo (mm)
     const LOGO_CY  = 19.5;         // centre Y du logo (mm)
     const LOGO_R   = 16;           // rayon (mm) — était 11
@@ -353,8 +355,8 @@ export function generateAdherentPdf(registration) {
     p.text('BONS EN CHABLAIS', LOGO_CX, LOGO_CY + 6.5, { fontSize: 5,   color: DARK, align: 'center' });
 
     const fx = ML/MM + LOGO_R * 2 + 5;   // texte header décalé après le logo
-    p.text('American Full Fighting Bons en Chablais - FFK', fx, 9,    { fontSize: 7.5, color: [255, 247, 237] });
-    p.text("Dossier d'Adhesion",                            fx, 17,   { fontSize: 15,  color: [255, 247, 237] });
+    p.text('AMERICAN FULL FIGHTING BONS EN CHABLAIS',      fx, 9,    { fontSize: 7.1, color: [255, 247, 237] });
+    p.text("Dossier d'adhesion",                            fx, 17,   { fontSize: 15,  color: [255, 247, 237] });
     p.text(`Saison 2025-2026  .  ${submittedAt}`,           fx, 23,   { fontSize: 6.5, color: [220, 200, 180] });
 
     p.text(`Ref. ${ref}`, 210 - ML/MM, 11, { fontSize: 6, color: [255, 247, 237], align: 'right' });
@@ -375,7 +377,7 @@ export function generateAdherentPdf(registration) {
     const summaryItems = [
         [formulaLabel,                    'Formule'],
         [`${cotisation.toFixed(2)} EUR`,  'Cotisation'],
-        [`${clothingTotal.toFixed(2)} EUR`,'Tenue club'],
+        [`${(clothingTotal + extraProductsTotal).toFixed(2)} EUR`,'Commandes club'],
         [`${total.toFixed(2)} EUR total`, `HelloAsso ${installments}x`],
     ];
     const colW = 210 / summaryItems.length;
@@ -474,7 +476,7 @@ export function generateAdherentPdf(registration) {
            ML/MM + 4, y + 10, { fontSize: 6.2, color: MUTED });
     p.text(`${total.toFixed(2)} EUR`, 210 - ML/MM - 4, y + 7.5, { fontSize: 14, color: DARK, align: 'right' });
     p.text(
-        `Cotis. ${cotisation.toFixed(2)} + Kit ${Number(totals.newMemberKit || 0).toFixed(2)} + Tenue ${clothingTotal.toFixed(2)}`,
+        `Cotis. ${cotisation.toFixed(2)} + Kit ${Number(totals.newMemberKit || 0).toFixed(2)} + Commandes ${(clothingTotal + extraProductsTotal).toFixed(2)}`,
         210 - ML/MM - 4, y + 12, { fontSize: 5.8, color: MUTED, align: 'right' },
     );
     y += 18;
@@ -514,7 +516,7 @@ export function generateAdherentPdf(registration) {
     const tshirtQty    = Number(co.tshirtQty    || 0);
     const pantalonQty  = Number(co.pantalonQty  || 0);
     const priceTshirt  = Number(totals.pricingTshirt   || 25);
-    const pricePantalon= Number(totals.pricingPantalon || 10);
+    const pricePantalon= Number(totals.pricingPantalon || 15);
 
     const tenueRows = [
         ['T-shirt club AFFBC',  `${priceTshirt} EUR`,  safe(co.tshirtSize)   || '-', tshirtQty,   `${(tshirtQty   * priceTshirt  ).toFixed(2)} EUR`],
@@ -531,7 +533,26 @@ export function generateAdherentPdf(registration) {
         });
         y += 9;
     });
-    p.text(`Total tenue : ${clothingTotal.toFixed(2)} EUR`, 210 - ML/MM, y, { fontSize: 6.2, color: DARK, align: 'right' });
+    orderItems.forEach((item) => {
+        ensureSpace(9);
+        p.setFillRgb(WHITE);
+        p.setStrokeRgb(LINE);
+        p.setLineWidth(0.2);
+        p.roundedRect(ML/MM, y, CW/MM, 7.5, 1.2, 'B');
+        const sizeSuffix = item.size ? ` (${safe(item.size)})` : '';
+        const row = [
+            `${safe(item.name)}${sizeSuffix}`,
+            `${Number(item.unitPrice || 0).toFixed(2)} EUR`,
+            item.size ? safe(item.size) : '-',
+            Number(item.quantity || 0),
+            `${Number(item.total || 0).toFixed(2)} EUR`,
+        ];
+        row.forEach((cell, i) => {
+            p.text(String(cell), colXs[i] + 2, y + 5, { fontSize: i === 0 ? 6.5 : 6, color: INK });
+        });
+        y += 9;
+    });
+    p.text(`Total commandes : ${(clothingTotal + extraProductsTotal).toFixed(2)} EUR`, 210 - ML/MM, y, { fontSize: 6.2, color: DARK, align: 'right' });
     y += 7;
 
     // ══════════════════════════════════════════════════════════════════════════════
