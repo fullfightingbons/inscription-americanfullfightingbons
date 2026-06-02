@@ -22,6 +22,7 @@
 	"private": true,
 	"scripts": {
 		"cf-typegen": "wrangler types",
+		"typecheck": "tsc --noEmit",
 		"check": "tsc --noEmit && wrangler deploy --dry-run",
 		"deploy": "wrangler deploy",
 		"dev": "pnpm seedLocalD1 && wrangler dev",
