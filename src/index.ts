@@ -50,6 +50,18 @@ export default {
       return redirectToCanonicalRoot(url, env);
     }
 
+    if (path === "/api/health" && (method === "GET" || method === "HEAD")) {
+      return new Response(JSON.stringify({ ok: true, service: "inscription-americanfullfightingbons", date: new Date().toISOString() }), {
+        headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+      });
+    }
+
+    if (path === "/api/version" && (method === "GET" || method === "HEAD")) {
+      return new Response(JSON.stringify({ service: "inscription-americanfullfightingbons", version: "1.0.0" }), {
+        headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+      });
+    }
+
     if (path === "/inscription" || path === "/inscription/" || path === "/inscription/index.html") {
       return redirect(url, "/", 302, true);
     }
