@@ -17,12 +17,12 @@
 	},
 	"devDependencies": {
 		"typescript": "5.9.3",
-		"wrangler": "4.56.0"
+		"wrangler": "4.92.0"
 	},
 	"private": true,
 	"scripts": {
 		"cf-typegen": "wrangler types",
-		"check": "tsc && wrangler deploy --dry-run",
+		"check": "tsc --noEmit && wrangler deploy --dry-run",
 		"deploy": "wrangler deploy",
 		"dev": "pnpm seedLocalD1 && wrangler dev",
 		"predeploy": "wrangler d1 migrations apply DB --remote",
