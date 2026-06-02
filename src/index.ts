@@ -41,6 +41,9 @@ function methodNotAllowed(methods: string[]) {
 
 function withSecurityHeaders(response: Response): Response {
   const headers = new Headers(response.headers);
+  headers.set("Access-Control-Allow-Origin", "*");
+  headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  headers.set("Access-Control-Allow-Headers", "Content-Type");
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set("X-Frame-Options", "DENY");
   headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
@@ -80,13 +83,13 @@ export default {
     }
 
     if (path === "/api/health" && (method === "GET" || method === "HEAD")) {
-      return withSecurityHeaders(new Response(JSON.stringify({ ok: true, service: "inscription-americanfullfightingbons", date: new Date().toISOString() }), {
+      return withSecurityHeaders(new Response(JSON.stringify({ ok: true, data: { service: "inscription-americanfullfightingbons", date: new Date().toISOString() } }), {
         headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
       }));
     }
 
     if (path === "/api/version" && (method === "GET" || method === "HEAD")) {
-      return withSecurityHeaders(new Response(JSON.stringify({ service: "inscription-americanfullfightingbons", version: "1.0.0" }), {
+      return withSecurityHeaders(new Response(JSON.stringify({ ok: true, data: { service: "inscription-americanfullfightingbons", version: "1.0.0" } }), {
         headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
       }));
     }
