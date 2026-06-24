@@ -118,7 +118,7 @@
   <p>Les polices de caractères sont chargées depuis les serveurs de Google Fonts (fonts.googleapis.com), ce qui entraîne la transmission de votre adresse IP à Google. Si vous souhaitez éviter cela, vous pouvez désactiver le chargement des polices externes dans les paramètres de votre navigateur — le site reste fonctionnel avec les polices système.</p>
 
   <h2>5. Sécurité</h2>
-  <p>Les données sont chiffrées en transit (HTTPS/TLS). Les pièces justificatives sont stockées dans un espace de stockage sécurisé Cloudflare R2 à accès restreint. Les mots de passe des comptes administrateurs sont stockés avec hachage bcrypt.</p>
+  <p>Les données sont chiffrées en transit (HTTPS/TLS). Les pièces justificatives sont stockées dans un espace de stockage sécurisé Cloudflare R2 à accès restreint. Les mots de passe des comptes administrateurs sont stockés avec hachage PBKDF2-SHA256 (100 000 itérations, sel aléatoire par compte).</p>
 
   <h2>6. Contact</h2>
   <p>Pour toute question relative à ce site ou au traitement de vos données :<br>
