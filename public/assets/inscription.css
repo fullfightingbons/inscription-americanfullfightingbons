@@ -591,6 +591,7 @@ a{color:inherit}
   display:flex;
   align-items:center;
   gap:18px;
+  margin-top:16px;
   border-radius:var(--radius-sm);
   padding:20px 22px;
   border:1px solid rgba(0,130,195,.22);
