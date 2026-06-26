@@ -182,6 +182,7 @@ function applyDraft(data) {
   set('rulesAccepted', data.rulesAccepted); set('insuranceAcknowledged', data.insuranceAcknowledged);
   set('imageRights', data.imageRights);
   set('consentSignedAt', data.consentSignedAt); set('applicantSignatureName', data.applicantSignatureName);
+  if (data.legalConsentSignatureName) set('legalConsentSignatureName', data.legalConsentSignatureName);
   // Paiement
   set('payerFirstName', data.payerFirstName);
   set('payerLastName', data.payerLastName);
@@ -320,6 +321,7 @@ function collectAllFields() {
     rulesAccepted: checked('rulesAccepted'), insuranceAcknowledged: checked('insuranceAcknowledged'),
     imageRights: val('imageRights'),
     consentSignedAt: val('consentSignedAt'), applicantSignatureName: val('applicantSignatureName'),
+    legalConsentSignatureName: val('legalConsentSignatureName'),
     payerFirstName: val('payerFirstName'),
     payerLastName: val('payerLastName'),
     installmentCount: getInstallmentCount(),
@@ -709,7 +711,11 @@ function validateStep(step) {
       if (!checked('insuranceAcknowledged')) return 'Vous devez reconnaître avoir pris connaissance des modalités d\'assurance.';
       if (!val('imageRights')) return 'Veuillez faire votre choix concernant le droit à l\'image.';
       if (!val('consentSignedAt')) return 'La date de signature est obligatoire.';
-      if (!val('applicantSignatureName')) return 'La signature du pratiquant est obligatoire.';
+      if (isMinor(val('birthDate'))) {
+        if (!val('legalConsentSignatureName')) return 'La signature du représentant légal (droit à l\'image) est obligatoire pour un mineur.';
+      } else {
+        if (!val('applicantSignatureName')) return 'La signature du pratiquant est obligatoire.';
+      }
       return null;
     }
     case 7:
@@ -999,6 +1005,7 @@ function buildPayload() {
       insuranceAcknowledged: checked('insuranceAcknowledged'),
       imageRights: val('imageRights'),
       applicantSignatureName: val('applicantSignatureName'),
+      legalConsentSignatureName: minor ? val('legalConsentSignatureName') : '',
       signedAt: val('consentSignedAt'),
     },
     payment: {
@@ -1275,6 +1282,7 @@ async function init() {
       if (err) { setAlert(err); return; }
       saveDraft();
       showStep(targetStep);
+      if (currentStep === 5) renderClothingOrder(); // Recalcul quantités tenue
     }
   });
 
