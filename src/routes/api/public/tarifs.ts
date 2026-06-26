@@ -14,7 +14,7 @@ type TarifsPayload = {
 
 type AppContext = {
     request: Request;
-    env: { DB?: D1Database; [key: string]: unknown };
+    env: { DB?: D1Database };
 };
 
 export async function onRequestGet({ env }: AppContext): Promise<Response> {
