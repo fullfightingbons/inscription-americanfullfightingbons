@@ -22,7 +22,7 @@ import {
   updateRegistrationPayment,
 } from "../../../../_lib/public-payments.js";
 import { generateAdherentPdf } from "../../../../_lib/pdf.js";
-import { isMinor, toBool, findActiveExercise } from "../../../../_lib/helpers.js";
+import { isMinor, toBool, findActiveExercise, seasonLabelFromExercise } from "../../../../_lib/helpers.js";
 import {
   buildAdditionalOrderSyncItems,
   buildClothingSyncItems,
@@ -650,12 +650,13 @@ function uint8ToBase64(bytes) {
 
 // ─── Construction du dossier normalisé pour generateAdherentPdf ───────────────
 
-function buildRegistrationPayload(registration, dossier, adherentId) {
+function buildRegistrationPayload(registration, dossier, adherentId, exercise) {
   const totals = dossier.computedTotals || {};
   const pay    = dossier.payment        || {};
   return {
     id:            registration.id,
     submittedAt:   new Date().toISOString().slice(0, 10),
+    seasonLabel:   seasonLabelFromExercise(exercise),
     identity:      dossier.identity             || {},
     contact:       dossier.contact              || {},
     emergency:     dossier.emergency            || {},
@@ -685,7 +686,7 @@ function buildRegistrationPayload(registration, dossier, adherentId) {
 
 // ─── Email de confirmation de paiement ───────────────────────────────────────
 
-async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId) {
+async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId, exercise) {
   if (!env.BREVO_API_KEY) return;
   const clubRecipient = env.SIGNUP_ALERT_TO || "fullfightingbons@gmail.com";
   const registrantRecipient = String(registration.email || "").trim().toLowerCase();
@@ -700,7 +701,7 @@ async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId)
   ].filter((entry, index, array) => entry && array.findIndex((item) => item?.email === entry.email) === index);
 
   // Génération PDF via le nouveau générateur mis en page
-  const payload = buildRegistrationPayload(registration, dossier, adherentId);
+  const payload = buildRegistrationPayload(registration, dossier, adherentId, exercise);
   const pdfBytes = generateAdherentPdf(payload);
   const pdfContent = uint8ToBase64(pdfBytes);
   const fileName = `inscription-affbc-${String(registration.id || "").slice(0, 8)}.pdf`;
@@ -755,9 +756,9 @@ async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId)
   });
 }
 
-async function storeRegistrationPdf(env, registration, dossier, adherentId) {
+async function storeRegistrationPdf(env, registration, dossier, adherentId, exercise) {
   try {
-    const payload  = buildRegistrationPayload(registration, dossier, adherentId);
+    const payload  = buildRegistrationPayload(registration, dossier, adherentId, exercise);
     const pdfBytes = generateAdherentPdf(payload);           // Uint8Array directement
     const fileName = `inscription-affbc-${String(registration.id || '').slice(0, 8)}.pdf`;
     const r2Key    = `adherents/${adherentId}/inscription-${String(registration.id).slice(0, 8)}.pdf`;
@@ -1075,7 +1076,7 @@ export async function onRequestGet(context) {
 
     // ── Email de confirmation ─────────────────────────────────────────────────
     const storedPdf = await storeRegistrationPdf(
-      context.env, registration, dossier, adherentId
+      context.env, registration, dossier, adherentId, exercise
     );
     if (storedPdf) {
       const pdfUrl = `/api/storage/fullfighting-pdf/${storedPdf.key}`;
@@ -1098,7 +1099,7 @@ export async function onRequestGet(context) {
     }
 
     // ── Email de confirmation ─────────────────────────────────────────────────
-    await sendPaymentConfirmedAlert(context.env, registration, dossier, adherentId);
+    await sendPaymentConfirmedAlert(context.env, registration, dossier, adherentId, exercise);
 
     // ── Réponse ───────────────────────────────────────────────────────────────
     return json({
