@@ -22,7 +22,7 @@ import {
   updateRegistrationPayment,
 } from "../../../../_lib/public-payments.js";
 import { generateAdherentPdf } from "../../../../_lib/pdf.js";
-import { isMinor, toBool } from "../../../../_lib/helpers.js";
+import { isMinor, toBool, findActiveExercise } from "../../../../_lib/helpers.js";
 import {
   buildAdditionalOrderSyncItems,
   buildClothingSyncItems,
@@ -105,16 +105,6 @@ function normalizeCheckoutIntentId(value) {
   return String(value || "").trim().replace(/\.0+$/, "");
 }
 
-async function findActiveExercise(db) {
-  const active = await db
-  .prepare(`SELECT * FROM exercices WHERE statut = 'actif' ORDER BY date_debut DESC LIMIT 1`)
-  .first();
-  if (active?.id) return active;
-  return db
-  .prepare(`SELECT * FROM exercices ORDER BY date_debut DESC LIMIT 1`)
-  .first();
-}
-
 async function findMatchingAdherent(db, payload) {
   const identity = payload?.identity || {};
   const contact = payload?.contact || {};
@@ -122,18 +112,39 @@ async function findMatchingAdherent(db, payload) {
   const prenom = String(identity.firstName || "").trim();
   const birthDate = String(identity.birthDate || "").trim();
   const email = String(contact.email || "").trim().toLowerCase();
-  if (!nom || !prenom || !birthDate || !email) return null;
-  const matches = await db
+  if (!nom || !prenom || !birthDate) return null;
+
+  if (email) {
+    const exactMatches = await db
+    .prepare(
+      `SELECT *
+      FROM adherents
+      WHERE nom = ? AND prenom = ? AND naissance = ? AND lower(email) = lower(?)
+      ORDER BY updated_at DESC, created_at DESC
+      LIMIT 1`,
+    )
+    .bind(nom, prenom, birthDate, email)
+    .all();
+    if (exactMatches?.results?.[0]) return exactMatches.results[0];
+  }
+
+  // Repli : si l'email a changé depuis la dernière inscription (cas réaliste
+  // d'une saison à l'autre), nom + prénom + date de naissance restent une
+  // signature suffisamment spécifique pour identifier la même personne.
+  // On ne l'utilise QUE s'il existe exactement une fiche correspondante, pour
+  // éviter de matcher la mauvaise personne en cas d'homonymie.
+  const fallbackMatches = await db
   .prepare(
     `SELECT *
     FROM adherents
-    WHERE nom = ? AND prenom = ? AND naissance = ? AND lower(email) = lower(?)
+    WHERE nom = ? AND prenom = ? AND naissance = ?
     ORDER BY updated_at DESC, created_at DESC
-    LIMIT 1`,
+    LIMIT 2`,
   )
-  .bind(nom, prenom, birthDate, email)
+  .bind(nom, prenom, birthDate)
   .all();
-  return matches?.results?.[0] || null;
+  const candidates = fallbackMatches?.results || [];
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 // ─── Création de la fiche adhérent ───────────────────────────────────────────
@@ -772,9 +783,10 @@ export async function onRequestGet(context) {
     return badRequest("D1 binding is missing", 500);
   }
 
+  let registrationId = null;
   try {
     const url = new URL(context.request.url);
-    const registrationId = String(url.searchParams.get("registrationId") || "").trim();
+    registrationId = String(url.searchParams.get("registrationId") || "").trim();
     if (!registrationId) {
       return badRequest("registrationId obligatoire");
     }
@@ -826,6 +838,58 @@ export async function onRequestGet(context) {
         },
         error: null,
       });
+    }
+
+    // ── Verrou anti-concurrence ───────────────────────────────────────────────
+    // Ce handler peut être appelé en parallèle par trois canaux différents :
+    // le webhook HelloAsso, le retour automatique du navigateur, et le bouton
+    // "Vérifier à nouveau" côté client. Sans verrou, deux exécutions concurrentes
+    // pourraient toutes les deux lire adherent_id à null et créer chacune une
+    // fiche adhérent / facture / écritures comptables en double.
+    // On pose le verrou ATOMIQUEMENT le plus tôt possible (avant tout effet de
+    // bord) via un UPDATE conditionnel : seule la requête qui réussit à faire
+    // passer le statut de son état courant à "traitement_paiement" continue.
+    if (!registration.adherent_id) {
+      const lockResult = await context.env.DB.prepare(
+        `UPDATE inscriptions_publiques
+        SET statut = 'traitement_paiement', updated_at = ?
+        WHERE id = ? AND adherent_id IS NULL AND statut != 'traitement_paiement'`,
+      ).bind(new Date().toISOString(), registrationId).run();
+
+      const lockAcquired = (lockResult?.meta?.rows_written ?? 0) > 0;
+      if (!lockAcquired) {
+        // Une autre requête traite déjà ce paiement (ou vient de terminer) :
+        // on relit l'état actuel plutôt que de retraiter en double.
+        const refreshed = await getRegistration(context.env.DB, registrationId);
+        if (refreshed.adherent_id) {
+          return json({
+            data: {
+              paid: true,
+              fullyPaid: paymentSnapshot.fullyPaid,
+              alreadyProcessed: true,
+              registrationId,
+              adherentId: refreshed.adherent_id,
+              installmentCount: paymentSnapshot.installmentCount,
+              paidInstallments: paymentSnapshot.paidInstallments,
+              remainingInstallments: paymentSnapshot.remainingInstallments,
+            },
+            error: null,
+          });
+        }
+        return json({
+          data: {
+            paid: true,
+            fullyPaid: paymentSnapshot.fullyPaid,
+            processing: true,
+            registrationId,
+            adherentId: null,
+            installmentCount: paymentSnapshot.installmentCount,
+            paidInstallments: paymentSnapshot.paidInstallments,
+            remainingInstallments: paymentSnapshot.remainingInstallments,
+          },
+          error: null,
+        });
+      }
     }
 
     if (registration.adherent_id) {
@@ -1052,6 +1116,17 @@ export async function onRequestGet(context) {
       error: null,
     });
   } catch (error) {
+    // Si le verrou "traitement_paiement" a été posé mais que le traitement a
+    // échoué avant la fin (erreur HelloAsso transitoire, timeout, etc.), on le
+    // libère pour permettre une nouvelle tentative au lieu de bloquer le
+    // dossier indéfiniment dans cet état intermédiaire.
+    if (registrationId) {
+      await context.env.DB.prepare(
+        `UPDATE inscriptions_publiques
+        SET statut = 'paiement_en_attente', updated_at = ?
+        WHERE id = ? AND adherent_id IS NULL AND statut = 'traitement_paiement'`,
+      ).bind(new Date().toISOString(), registrationId).run().catch(() => {});
+    }
     return badPaymentRequest(error);
   }
 }
