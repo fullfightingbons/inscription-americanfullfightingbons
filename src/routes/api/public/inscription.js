@@ -13,7 +13,7 @@
 
 import { badRequest, json } from "../../_lib/data.js";
 import { getClientIp, writeAuditLog } from "../../_lib/audit.js";
-import { isMinor, calculateTotals, toBool, normalizeInstallmentCount } from "../../_lib/helpers.js";
+import { isMinor, calculateTotals, toBool, normalizeInstallmentCount, findActiveExercise } from "../../_lib/helpers.js";
 import {
   assertAdditionalOrderItemsStock,
   assertClothingOrderStock,
@@ -557,12 +557,6 @@ async function sendSignupAlert(env, payload, totals, registrationId, helloAssoUr
 
 // ─── Base de données ──────────────────────────────────────────────────────────
 
-async function findActiveExercise(db) {
-  const active = await db.prepare(`SELECT * FROM exercices WHERE statut = 'actif' ORDER BY date_debut DESC LIMIT 1`).first();
-  if (active?.id) return active;
-  return db.prepare(`SELECT * FROM exercices ORDER BY date_debut DESC LIMIT 1`).first();
-}
-
 function normalizePersonName(value) { return String(value || "").trim(); }
 function normalizeEmail(value)      { return String(value || "").trim().toLowerCase(); }
 function hasBureauDiscipline(discipline) { return String(discipline || "").toLowerCase().includes("membre du bureau"); }
@@ -588,6 +582,15 @@ async function findMatchingAdherent(db, payload) {
 
 export async function onRequestPost(context) {
   if (!context.env.DB) return badRequest("D1 binding is missing", 500);
+
+  // Suivi pour nettoyage en cas d'échec après le point de non-retour (voir catch
+  // final) : une fois la ligne "brouillon" insérée et/ou des fichiers uploadés
+  // sur R2, on doit pouvoir les nettoyer plutôt que de laisser des données
+  // orphelines (fichiers sensibles sans inscription, ou inscription invisible
+  // après un paiement HelloAsso réussi).
+  let registrationId = null;
+  let draftInserted = false;
+  const uploadedFileRefs = []; // { bucket: R2Bucket, key }
 
   try {
     const formData = await context.request.formData();
@@ -643,32 +646,17 @@ export async function onRequestPost(context) {
       return boutiqueStockRequestError(error);
     }
 
-    // ── Upload des pièces justificatives ─────────────────────────────────────
-    const registrationId    = crypto.randomUUID();
-    const uploadedDocuments = {};
-
-    uploadedDocuments.photoIdentity = await uploadRequiredFile(context.env, registrationId, formData.get("photoIdentity"), "photo-identite", true);
-
-    if (validation.certificateRequired) {
-      uploadedDocuments.medicalCertificate = await uploadRequiredFile(context.env, registrationId, formData.get("medicalCertificate"), "certificat-medical", false);
-    }
-    if (toBool(payload.practice?.passRegionEnabled)) {
-      uploadedDocuments.passRegionDocument = await uploadRequiredFile(context.env, registrationId, formData.get("passRegionDocument"), "pass-region", false);
-    }
-    if (payload.practice?.formulaCode === "pro" || payload.practice?.formulaCode === "cse_thales") {
-      uploadedDocuments.proofDocument = await uploadRequiredFile(context.env, registrationId, formData.get("proProofDocument"), "justificatif-tarif", false);
-    }
-
-    // ── Création de la session de paiement HelloAsso ─────────────────────────
-    const checkout = await createHelloAssoCheckout(context.env, payload, totals, registrationId);
-    const helloAssoUrl             = checkout.url;
-    const helloAssoCheckoutIntentId = checkout.checkoutIntentId;
-
-    // ── Insertion dans inscriptions_publiques ────────────────────────────────
+    // ── Insertion immédiate d'une ligne "brouillon" ──────────────────────────
+    // On réserve l'ID d'inscription en base AVANT tout upload de fichier ou
+    // appel HelloAsso. Ainsi, même si une étape suivante échoue, il existe
+    // toujours une trace en base (statut "brouillon" ou "echec_creation")
+    // plutôt qu'un paiement HelloAsso ou des fichiers R2 sans aucune ligne
+    // pour les rattacher.
+    registrationId = crypto.randomUUID();
     const exercise = await findActiveExercise(context.env.DB);
-    const now      = new Date().toISOString();
+    const draftNow = new Date().toISOString();
 
-    const row = {
+    const draftRow = {
       id:                          registrationId,
       nom:                         String(payload.identity.lastName  || "").trim().toUpperCase(),
       prenom:                      String(payload.identity.firstName || "").trim(),
@@ -681,26 +669,66 @@ export async function onRequestPost(context) {
       montant_total:               totals.total,
       paiement_mode:               "helloasso",
       paiement_reference:          `ONLINE-${registrationId.slice(0, 8).toUpperCase()}`,
-      statut:                      "paiement_en_attente",
+      statut:                      "brouillon",
       mineur:                      validation.minor ? 1 : 0,
       pass_region:                 toBool(payload.practice.passRegionEnabled) ? 1 : 0,
       droit_image:                 payload.consents.imageRights === "yes" ? 1 : 0,
       reglement_accepte:           toBool(payload.consents.rulesAccepted) ? 1 : 0,
       adherent_id:                 null,
-      helloasso_checkout_intent_id: helloAssoCheckoutIntentId,
-      helloasso_url:               helloAssoUrl,
+      helloasso_checkout_intent_id: null,
+      helloasso_url:               null,
       dossier_json:                JSON.stringify({ ...payload, computedTotals: totals }),
-      documents_json:              JSON.stringify(uploadedDocuments),
+      documents_json:              JSON.stringify({}),
       exercice_id:                 exercise?.id || null,
-      created_at:                  now,
-      updated_at:                  now,
-      submitted_at:                now,
+      created_at:                  draftNow,
+      updated_at:                  draftNow,
+      submitted_at:                draftNow,
     };
 
-    const columns = Object.keys(row);
+    const draftColumns = Object.keys(draftRow);
     await context.env.DB.prepare(
-      `INSERT INTO inscriptions_publiques (${columns.map((c) => `"${c}"`).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
-    ).bind(...columns.map((c) => row[c])).run();
+      `INSERT INTO inscriptions_publiques (${draftColumns.map((c) => `"${c}"`).join(", ")}) VALUES (${draftColumns.map(() => "?").join(", ")})`,
+    ).bind(...draftColumns.map((c) => draftRow[c])).run();
+    draftInserted = true;
+
+    // ── Upload des pièces justificatives ─────────────────────────────────────
+    const uploadedDocuments = {};
+
+    uploadedDocuments.photoIdentity = await uploadRequiredFile(context.env, registrationId, formData.get("photoIdentity"), "photo-identite", true);
+    uploadedFileRefs.push(uploadedDocuments.photoIdentity);
+
+    if (validation.certificateRequired) {
+      uploadedDocuments.medicalCertificate = await uploadRequiredFile(context.env, registrationId, formData.get("medicalCertificate"), "certificat-medical", false);
+      uploadedFileRefs.push(uploadedDocuments.medicalCertificate);
+    }
+    if (toBool(payload.practice?.passRegionEnabled)) {
+      uploadedDocuments.passRegionDocument = await uploadRequiredFile(context.env, registrationId, formData.get("passRegionDocument"), "pass-region", false);
+      uploadedFileRefs.push(uploadedDocuments.passRegionDocument);
+    }
+    if (payload.practice?.formulaCode === "pro" || payload.practice?.formulaCode === "cse_thales") {
+      uploadedDocuments.proofDocument = await uploadRequiredFile(context.env, registrationId, formData.get("proProofDocument"), "justificatif-tarif", false);
+      uploadedFileRefs.push(uploadedDocuments.proofDocument);
+    }
+
+    // ── Création de la session de paiement HelloAsso ─────────────────────────
+    const checkout = await createHelloAssoCheckout(context.env, payload, totals, registrationId);
+    const helloAssoUrl             = checkout.url;
+    const helloAssoCheckoutIntentId = checkout.checkoutIntentId;
+
+    // ── Finalisation de l'inscription ────────────────────────────────────────
+    const now = new Date().toISOString();
+    await context.env.DB.prepare(
+      `UPDATE inscriptions_publiques
+      SET statut = ?, helloasso_checkout_intent_id = ?, helloasso_url = ?, documents_json = ?, updated_at = ?
+      WHERE id = ?`,
+    ).bind(
+      "paiement_en_attente",
+      helloAssoCheckoutIntentId,
+      helloAssoUrl,
+      JSON.stringify(uploadedDocuments),
+      now,
+      registrationId,
+    ).run();
 
     // ── Email d'alerte club ───────────────────────────────────────────────────
     let emailAlertStatus = { sent: false, reason: "not_attempted" };
@@ -723,13 +751,37 @@ export async function onRequestPost(context) {
       action:     "public.inscription_submitted",
       entityType: "inscriptions_publiques",
       entityId:   registrationId,
-      details:    { email: row.email, total: totals.total, formula: row.formule_code, paymentMethod: "helloasso", helloAssoCheckoutIntentId, emailAlertStatus, confirmationEmailStatus },
+      details:    { email: draftRow.email, total: totals.total, formula: draftRow.formule_code, paymentMethod: "helloasso", helloAssoCheckoutIntentId, emailAlertStatus, confirmationEmailStatus },
       ip:         getClientIp(context.request),
     }).catch(() => {});
 
     return json({ data: { registrationId, total: totals.total, helloAssoUrl, helloAssoCheckoutIntentId }, error: null });
 
   } catch (error) {
+    // ── Nettoyage en cas d'échec après le point de non-retour ────────────────
+    // Si des fichiers ont déjà été envoyés sur R2, on les supprime pour éviter
+    // d'accumuler des documents sensibles (photo d'identité, certificat
+    // médical) sans inscription valide pour les référencer.
+    for (const ref of uploadedFileRefs) {
+      if (!ref?.key) continue;
+      const bucket = ref.bucket === "storage" ? context.env.R2_STORAGE : context.env.R2_PDF;
+      if (bucket) {
+        await bucket.delete(ref.key).catch(() => {});
+      }
+    }
+    // Si la ligne "brouillon" a été insérée mais que la suite a échoué (upload
+    // ou HelloAsso), on la marque explicitement en échec plutôt que de la
+    // laisser bloquée en "brouillon" indéfiniment. Si, au contraire, le
+    // checkout HelloAsso a été créé avec succès mais que la finalisation a
+    // échoué (cas rare), la ligne reste en "brouillon" avec le nécessaire pour
+    // investiguer manuellement plutôt que d'être supprimée — un paiement a pu
+    // partir côté HelloAsso.
+    if (draftInserted && registrationId) {
+      await context.env.DB.prepare(
+        `UPDATE inscriptions_publiques SET statut = 'echec_creation', updated_at = ? WHERE id = ? AND statut = 'brouillon'`,
+      ).bind(new Date().toISOString(), registrationId).run().catch(() => {});
+    }
+
     // Erreurs métier (validation, fichiers) → message lisible ; erreurs inattendues → message générique
     const isBusinessError = error.message && error.message.length < 200;
     console.error("[inscription] Erreur:", error?.message ?? String(error));
