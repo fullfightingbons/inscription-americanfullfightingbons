@@ -25,7 +25,7 @@
 		"typecheck": "tsc --noEmit",
 		"check": "tsc --noEmit && wrangler deploy --dry-run",
 		"deploy": "wrangler deploy",
-		"dev": "pnpm seedLocalD1 && wrangler dev",
+		"dev": "npm run seedLocalD1 && wrangler dev",
 		"predeploy": "wrangler d1 migrations apply DB --remote",
 		"seedLocalD1": "wrangler d1 migrations apply DB --local",
 		"test": "node --test tests/*.test.mjs"
