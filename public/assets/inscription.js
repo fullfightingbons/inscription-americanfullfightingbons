@@ -356,11 +356,9 @@ function calculateTotals() {
   const passRegionAmount = passRegionEnabled ? Number(val('passRegionAmount') || 0) : 0;
   const cotisation = Math.max(0, baseCotisation - passRegionAmount);
 
-  const tshirtQty = Math.max(clothing.tshirtQty, typeInscription === 'nouvelle' ? 1 : 0);
-  const pantalonQty = Math.max(clothing.pantalonQty, typeInscription === 'nouvelle' ? 1 : 0);
+  const tshirtQty   = Math.max(0, clothing.tshirtQty);
+  const pantalonQty = Math.max(0, clothing.pantalonQty);
   const passport = passportEnabled ? p.passport : 0;
-  // Le kit tenue n'est facturé que pour les nouvelles adhésions.
-  const newMemberKit = typeInscription === 'nouvelle' ? (p.newMemberKit || 0) : 0;
   const clothingTotal = tshirtQty * p.tshirt + pantalonQty * p.pantalon;
   const requestedItems = collectExtraOrderItems();
   const orderItems = getOrderProducts().map((product) => {
@@ -384,7 +382,7 @@ function calculateTotals() {
     };
   }).filter((item) => item.quantity > 0);
   const extraProductsTotal = orderItems.reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const total = cotisation + passport + clothingTotal + newMemberKit + extraProductsTotal;
+  const total = cotisation + passport + clothingTotal + extraProductsTotal;
 
   return {
     cotisation,
@@ -393,7 +391,6 @@ function calculateTotals() {
     clothingTotal,
     tshirtQty,
     pantalonQty,
-    newMemberKit,
     extraProductsTotal,
     orderItems,
     total,
@@ -686,6 +683,10 @@ function validateStep(step) {
     }
     case 5: { // Commandes
       const clothing = collectClothing();
+      if (val('typeInscription') === 'nouvelle') {
+        if (clothing.tshirtQty < 1) return 'Pour une nouvelle adhésion, au moins 1 t-shirt est obligatoire.';
+        if (clothing.pantalonQty < 1) return 'Pour une nouvelle adhésion, au moins 1 pantalon est obligatoire.';
+      }
       if (clothing.tshirtQty > 0 && !clothing.tshirtSize) return 'Veuillez sélectionner une taille de t-shirt.';
       if (clothing.pantalonQty > 0 && !clothing.pantalonSize) return 'Veuillez sélectionner une taille de pantalon.';
       const tshirtAvailable = getClothingSizeStock('tshirt', clothing.tshirtSize);
@@ -948,9 +949,6 @@ function buildPayload() {
   const clothing = collectClothing();
   const extraOrderItems = collectExtraOrderItems();
   const typeInscription = val('typeInscription');
-  const tshirtQty = Math.max(clothing.tshirtQty, typeInscription === 'nouvelle' ? 1 : 0);
-  const pantalonQty = Math.max(clothing.pantalonQty, typeInscription === 'nouvelle' ? 1 : 0);
-
   return {
     identity: {
       lastName: val('lastName'),
