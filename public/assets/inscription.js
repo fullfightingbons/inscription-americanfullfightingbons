@@ -793,8 +793,8 @@ function renderClothingOrder() {
         <small>${product.description || (product.source === 'boutique' ? 'Produit synchronisé depuis la boutique.' : 'Produit ajouté par le club.')}</small>
         <small id="order-stock-hint-${product.id}">${stockHint}</small>
       </div>
-      <div class="order-input"><span>${Number(product.price || 0).toFixed(2)} €</span></div>
-      <div class="order-input">
+      <div class="order-input" data-label="P.U."><span>${Number(product.price || 0).toFixed(2)} €</span></div>
+      <div class="order-input" data-label="Taille">
         ${product.requiresSize ? `
         <select data-order-size-item="${product.id}">
           <option value="">Taille</option>
@@ -802,10 +802,10 @@ function renderClothingOrder() {
         </select>
         ` : '<span style="color:var(--muted)">—</span>'}
       </div>
-      <div class="order-input">
+      <div class="order-input" data-label="Qté">
         <input type="number" min="0" max="10" value="${defaultQty}" data-order-item="${product.id}" style="width:60px" oninput="updateSummary()">
       </div>
-      <div class="order-input" data-order-subtotal="${product.id}">—</div>
+      <div class="order-input" data-label="Sous-total" data-order-subtotal="${product.id}">—</div>
     </div>`;
   }).join('');
   el.innerHTML = `
@@ -818,19 +818,19 @@ function renderClothingOrder() {
         <small>Tenue officielle noire validée</small>
         <small id="tshirt-stock-hint">${tshirtTotalStock == null ? 'Stock boutique indisponible.' : `Stock total boutique: ${tshirtTotalStock}`}</small>
       </div>
-      <div class="order-input"><span>${p.tshirt.toFixed(2)} €</span></div>
-      <div class="order-input">
+      <div class="order-input" data-label="P.U."><span>${p.tshirt.toFixed(2)} €</span></div>
+      <div class="order-input" data-label="Taille">
         <select data-size-item="tshirt">
           <option value="">Taille</option>
           ${tshirtOptions}
         </select>
       </div>
-      <div class="order-input">
+      <div class="order-input" data-label="Qté">
         <input type="number" min="0" max="5" value="${typeInscription === 'nouvelle' ? 1 : 0}"
                data-item="tshirt" style="width:60px"
                oninput="updateSummary()">
       </div>
-      <div class="order-input" id="tshirt-subtotal">—</div>
+      <div class="order-input" data-label="Sous-total" id="tshirt-subtotal">—</div>
     </div>
     <div class="order-row">
       <div>
@@ -838,19 +838,19 @@ function renderClothingOrder() {
         <small>Pantalon de boxe noir</small>
         <small id="pantalon-stock-hint">${pantalonTotalStock == null ? 'Stock boutique indisponible.' : `Stock total boutique: ${pantalonTotalStock}`}</small>
       </div>
-      <div class="order-input"><span>${p.pantalon.toFixed(2)} €</span></div>
-      <div class="order-input">
+      <div class="order-input" data-label="P.U."><span>${p.pantalon.toFixed(2)} €</span></div>
+      <div class="order-input" data-label="Taille">
         <select data-size-item="pantalon">
           <option value="">Taille</option>
           ${pantalonOptions}
         </select>
       </div>
-      <div class="order-input">
+      <div class="order-input" data-label="Qté">
         <input type="number" min="0" max="5" value="${typeInscription === 'nouvelle' ? 1 : 0}"
                data-item="pantalon" style="width:60px"
                oninput="updateSummary()">
       </div>
-      <div class="order-input" id="pantalon-subtotal">—</div>
+      <div class="order-input" data-label="Sous-total" id="pantalon-subtotal">—</div>
     </div>
     ${extraRows}
   `;
