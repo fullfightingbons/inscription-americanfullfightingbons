@@ -1,3 +1,15 @@
+// ─── Handlers des routes publiques d'inscription ──────────────────────────────
+// Ces modules ont été écrits avec la convention Cloudflare Pages Functions
+// (onRequestGet / onRequestPost prenant un objet { request, env }). Ce projet
+// est déployé comme un Worker classique (pas de routage par fichier), donc on
+// les branche explicitement ici plutôt que de compter sur un routage automatique.
+import { onRequestGet as inscriptionConfigHandler } from "./routes/api/public/inscription-config.js";
+import { onRequestGet as adherentEligibilityHandler } from "./routes/api/public/adherent-eligibility.js";
+import { onRequestPost as inscriptionSubmitHandler } from "./routes/api/public/inscription.js";
+import { onRequestGet as helloAssoStatusHandler } from "./routes/api/public/payment/helloasso/status.js";
+import { onRequestPost as helloAssoNotificationHandler } from "./routes/api/public/payment/helloasso/notification.js";
+import { onRequestGet as tarifsHandler } from "./routes/api/public/tarifs";
+
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
@@ -19,6 +31,7 @@ interface Env {
 }
 
 type Row = Record<string, unknown>;
+
 
 const SESSION_COOKIE = "affbc_site_session";
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -1341,7 +1354,7 @@ async function handleAdminSave(request: Request, env: Env): Promise<Response> {
 
 async function handleAdminLogin(request: Request, env: Env): Promise<Response> {
   const loginIp = request.headers.get("cf-connecting-ip") ?? "unknown";
-  if (!checkLoginRateLimit(loginIp)) {
+  if (!(await checkLoginRateLimit(loginIp, env))) {
     return error("Trop de tentatives. Réessayez dans 15 minutes.", 429);
   }
   const payload = (await request.json()) as Row;
@@ -1441,6 +1454,23 @@ async function routeApi(request: Request, env: Env, pathname: string): Promise<R
     return handleAdminSave(request, env);
   }
 
+  // ─── Routes publiques du formulaire d'inscription ───────────────────────────
+  if (pathname === "/api/public/adherent-eligibility" && request.method === "GET") {
+    return withHeaders(await adherentEligibilityHandler({ request, env }), request);
+  }
+  if ((pathname === "/api/public/inscription" || pathname === "/api/public/inscription/") && request.method === "POST") {
+    return withHeaders(await inscriptionSubmitHandler({ request, env }), request);
+  }
+  if (pathname === "/api/public/payment/helloasso/status" && request.method === "GET") {
+    return withHeaders(await helloAssoStatusHandler({ request, env }), request);
+  }
+  if (pathname === "/api/public/payment/helloasso/notification" && request.method === "POST") {
+    return withHeaders(await helloAssoNotificationHandler({ request, env }), request);
+  }
+  if (pathname === "/api/public/tarifs" && request.method === "GET") {
+    return withHeaders(await tarifsHandler({ request, env }), request);
+  }
+
   return error("Not found", 404, request);
 }
 
@@ -1465,6 +1495,14 @@ export {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === "/inscription-config" && request.method === "GET") {
+      try {
+        return withHeaders(await inscriptionConfigHandler({ request, env }), request);
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : "Erreur interne";
+        return error(message, 500, request);
+      }
+    }
     if (url.pathname.startsWith("/api/")) {
       try {
         return await routeApi(request, env, url.pathname);
