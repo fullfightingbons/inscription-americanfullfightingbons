@@ -1130,9 +1130,15 @@ async function handleHelloAssoReturn() {
       try {
         const res = await fetch(`${STATUS_URL}?registrationId=${encodeURIComponent(registrationId)}`, { cache: 'no-store' });
         const data = await res.json().catch(() => null);
-        if (data?.data?.paid) {
+        if (data?.data?.paid && !data?.data?.processing) {
           paymentData = data.data;
           break;
+        }
+        if (data?.data?.processing) {
+          // Une autre requête (webhook ou autre onglet) est en train de finaliser
+          // le dossier : on continue le polling plutôt que d'afficher un succès
+          // prématuré, la fiche adhérent n'existe pas encore.
+          paymentData = null;
         }
       } catch (e) { /* continuer */ }
       if (i < 4) await new Promise(r => setTimeout(r, 2000));
@@ -1206,7 +1212,7 @@ window.recheckStatus = async function(registrationId) {
   try {
     const res = await fetch(`${STATUS_URL}?registrationId=${encodeURIComponent(registrationId)}`, { cache: 'no-store' });
     const data = await res.json().catch(() => null);
-    if (data?.data?.paid) {
+    if (data?.data?.paid && !data?.data?.processing) {
       showPaymentSuccess(panel, data?.data || null);
     } else {
       showPaymentPending(null, panel, registrationId, data?.data || null);
