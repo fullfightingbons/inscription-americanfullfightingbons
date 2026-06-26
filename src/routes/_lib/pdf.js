@@ -19,6 +19,8 @@
  *   const pdfBytes = await generateAdherentPdf(registration);   // Uint8Array
  */
 
+import { currentSeasonLabel } from './helpers.js';
+
 // ─── Constantes page ──────────────────────────────────────────────────────────
 
 const W_PT = 595.28;   // A4 largeur en points
@@ -252,6 +254,7 @@ export function generateAdherentPdf(registration) {
     const installments = Math.max(1, Math.min(3, Number(pay.installmentCount || pr.installmentCount || 1)));
     const ref          = String(registration.id || 'AFFBC-XXXX').slice(0, 36);
     const submittedAt  = registration.submittedAt || new Date().toISOString().slice(0, 10);
+    const season       = safe(registration.seasonLabel) || currentSeasonLabel();
 
     const p = new PdfBuilder();
 
@@ -357,7 +360,7 @@ export function generateAdherentPdf(registration) {
     const fx = ML/MM + LOGO_R * 2 + 5;   // texte header décalé après le logo
     p.text('AMERICAN FULL FIGHTING BONS EN CHABLAIS',      fx, 9,    { fontSize: 7.1, color: [255, 247, 237] });
     p.text("Dossier d'adhesion",                            fx, 17,   { fontSize: 15,  color: [255, 247, 237] });
-    p.text(`Saison 2025-2026  .  ${submittedAt}`,           fx, 23,   { fontSize: 6.5, color: [220, 200, 180] });
+    p.text(`Saison ${season}  .  ${submittedAt}`,           fx, 23,   { fontSize: 6.5, color: [220, 200, 180] });
 
     p.text(`Ref. ${ref}`, 210 - ML/MM, 11, { fontSize: 6, color: [255, 247, 237], align: 'right' });
     p.setFillRgb(GREEN);
@@ -472,7 +475,7 @@ export function generateAdherentPdf(registration) {
     p.setLineWidth(0.5);
     p.roundedRect(ML/MM, y, CW/MM, 15, 2, 'B');
     p.text(formulaLabel, ML/MM + 4, y + 5.5, { fontSize: 11, color: INK });
-    p.text('Adhesion annuelle - Licence FFK - Assurance RC + IA - Saison 2025-2026',
+    p.text(`Adhesion annuelle - Licence FFK - Assurance RC + IA - Saison ${season}`,
            ML/MM + 4, y + 10, { fontSize: 6.2, color: MUTED });
     p.text(`${total.toFixed(2)} EUR`, 210 - ML/MM - 4, y + 7.5, { fontSize: 14, color: DARK, align: 'right' });
     p.text(

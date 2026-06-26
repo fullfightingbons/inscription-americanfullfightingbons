@@ -35,6 +35,31 @@ export async function findActiveExercise(db) {
   return db.prepare(`SELECT * FROM exercices ORDER BY date_debut DESC LIMIT 1`).first();
 }
 
+/**
+ * Calcule un libellé de saison "AAAA-AAAA" à partir d'une date (saison
+ * sportive démarrant en septembre). Reproduit la même règle que
+ * currentSeasonLabel()/seasonFromDate() côté logiciel de gestion, pour que
+ * les deux logiciels affichent toujours la même saison.
+ */
+export function currentSeasonLabel(ref = new Date()) {
+  const year = ref.getFullYear();
+  const month = ref.getMonth() + 1; // 1-12
+  const start = month >= 9 ? year : year - 1;
+  return `${start}-${start + 1}`;
+}
+
+/**
+ * Libellé de saison à afficher : priorité au libellé de l'exercice comptable
+ * actif en base (piloté par le club dans l'onglet Administration de la
+ * gestion), avec repli sur un calcul automatique si aucun exercice n'est
+ * configuré ou que son libellé ne correspond pas au format attendu.
+ */
+export function seasonLabelFromExercise(exercise) {
+  const label = String(exercise?.libelle || "").trim();
+  if (/^\d{4}-\d{4}$/.test(label)) return label;
+  return currentSeasonLabel();
+}
+
 // Montants de remise Pass Région réellement proposés par le formulaire
 // (cf. <select id="passRegionAmount"> dans index.html). Toute autre valeur
 // est rejetée pour empêcher une falsification du montant côté client.
