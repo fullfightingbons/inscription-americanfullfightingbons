@@ -586,6 +586,68 @@ a{color:inherit}
   font-size:14px;
 }
 .health-box p,.info-banner{margin:0;line-height:1.7}
+
+.partner-banner{
+  display:flex;
+  align-items:flex-start;
+  gap:16px;
+  border-radius:var(--radius-sm);
+  padding:18px 20px;
+  border:1px solid rgba(36,49,63,.16);
+  background:
+    linear-gradient(135deg, rgba(36,49,63,.05), rgba(36,49,63,0)),
+    #fff;
+  box-shadow:0 14px 30px rgba(54,25,13,.06);
+  margin-bottom:18px;
+  flex-wrap:wrap;
+}
+.partner-banner-icon{
+  flex:0 0 auto;
+  width:48px;
+  height:48px;
+  border-radius:14px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:linear-gradient(160deg,var(--navy),#0f1822);
+  color:#fff;
+}
+.partner-banner-body{
+  flex:1 1 260px;
+  min-width:0;
+}
+.partner-banner-kicker{
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  font-size:11px;
+  font-weight:700;
+  color:var(--navy);
+  margin-bottom:4px;
+}
+.partner-banner-body h3{
+  margin:0 0 6px;
+  font-size:17px;
+  color:var(--ink);
+}
+.partner-banner-body p{
+  margin:0;
+  color:var(--muted);
+  font-size:14px;
+  line-height:1.6;
+}
+.partner-banner-cta{
+  flex:0 0 auto;
+  align-self:center;
+  white-space:nowrap;
+  background:linear-gradient(180deg,var(--navy),#0f1822);
+  border-color:transparent;
+  color:#fff;
+}
+@media (max-width:640px){
+  .partner-banner{flex-direction:column;align-items:stretch}
+  .partner-banner-cta{align-self:stretch;text-align:center}
+}
+
 .qs-grid{
   display:grid;
   gap:12px;
