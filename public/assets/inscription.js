@@ -359,7 +359,8 @@ function calculateTotals() {
   const tshirtQty = Math.max(clothing.tshirtQty, typeInscription === 'nouvelle' ? 1 : 0);
   const pantalonQty = Math.max(clothing.pantalonQty, typeInscription === 'nouvelle' ? 1 : 0);
   const passport = passportEnabled ? p.passport : 0;
-  const newMemberKit = p.newMemberKit || 0;
+  // Le kit tenue n'est facturé que pour les nouvelles adhésions.
+  const newMemberKit = typeInscription === 'nouvelle' ? (p.newMemberKit || 0) : 0;
   const clothingTotal = tshirtQty * p.tshirt + pantalonQty * p.pantalon;
   const requestedItems = collectExtraOrderItems();
   const orderItems = getOrderProducts().map((product) => {
