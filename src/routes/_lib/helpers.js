@@ -118,7 +118,9 @@ export function calculateTotals(practice, pricing, clothing = {}, extraOrderItem
     typeInscription === "nouvelle" ? 1 : 0,
   );
 
-  const newMemberKit    = Number(pricing.newMemberKit || 0);
+  // Le kit tenue n'est facturé que pour les nouvelles adhésions.
+  // Pour un renouvellement (y compris membres du bureau), il doit être 0.
+  const newMemberKit    = typeInscription === "nouvelle" ? Number(pricing.newMemberKit || 0) : 0;
   const passport        = passportEnabled ? Number(pricing.passport || 25) : 0;
   const pricingTshirt   = Number(pricing.tshirt   || 25);
   const pricingPantalon = Number(pricing.pantalon || 15);
