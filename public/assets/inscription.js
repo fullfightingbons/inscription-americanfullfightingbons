@@ -823,6 +823,49 @@ function renderClothingOrder() {
         <details class="size-guide">
           <summary>
             <span class="sg-icon">📏</span>
+            <span class="sg-label">Guide des tailles — T-shirt unisexe</span>
+            <span class="sg-chevron">▸</span>
+          </summary>
+          <div class="size-guide-body">
+            <p class="size-guide-note">Mesurez votre <strong>tour de poitrine</strong> (sous les aisselles) avec un mètre ruban.</p>
+            <table class="size-guide-table">
+              <thead><tr><th>Taille</th><th>Tour de poitrine (cm)</th><th>Longueur (cm)</th></tr></thead>
+              <tbody>
+                <tr><td><span class="sz-badge">XS</span></td><td>80 – 88</td><td>66</td></tr>
+                <tr><td><span class="sz-badge">S</span></td><td>88 – 96</td><td>69</td></tr>
+                <tr><td><span class="sz-badge">M</span></td><td>96 – 104</td><td>72</td></tr>
+                <tr><td><span class="sz-badge">L</span></td><td>104 – 112</td><td>74</td></tr>
+                <tr><td><span class="sz-badge">XL</span></td><td>112 – 120</td><td>76</td></tr>
+                <tr><td><span class="sz-badge">XXL</span></td><td>120 – 128</td><td>78</td></tr>
+              </tbody>
+            </table>
+            <p class="size-guide-src">En cas de doute, choisissez la taille supérieure.</p>
+          </div>
+        </details>
+      </div>
+      <div class="order-input" data-label="P.U."><span>${p.tshirt.toFixed(2)} €</span></div>
+      <div class="order-input" data-label="Taille">
+        <select data-size-item="tshirt">
+          <option value="">Taille</option>
+          ${tshirtOptions}
+        </select>
+      </div>
+      <div class="order-input" data-label="Qté">
+        <input type="number" min="0" max="5" value="${typeInscription === 'nouvelle' ? 1 : 0}"
+               data-item="tshirt" style="width:60px"
+               oninput="updateSummary()">
+      </div>
+      <div class="order-input" data-label="Sous-total" id="tshirt-subtotal">—</div>
+    </div>
+    <div class="order-row">
+      <div>
+        <strong>Pantalon club AFFBC</strong>
+        <small>Pantalon budo noir unisexe</small>
+        <small id="pantalon-stock-hint">${pantalonTotalStock == null ? 'Stock boutique indisponible.' : `Stock total boutique: ${pantalonTotalStock}`}</small>
+
+        <details class="size-guide">
+          <summary>
+            <span class="sg-icon">📏</span>
             <span class="sg-label">Guide des tailles — Pantalon budo unisexe</span>
             <span class="sg-chevron">▸</span>
           </summary>
@@ -830,9 +873,15 @@ function renderClothingOrder() {
             <p class="size-guide-note">Mesurez votre <strong>tour de taille</strong> (au-dessus du nombril) et votre <strong>tour de hanches</strong> avec un mètre ruban.</p>
             <table class="size-guide-table">
               <thead><tr><th>Taille</th><th>Tour de taille (cm)</th><th>Tour de hanches (cm)</th></tr></thead>
-              <tbody><tr><td><span class="sz-badge">XS</span></td><td>80 – 85</td><td>66 – 71</td></tr><tr><td><span class="sz-badge">S</span></td><td>86 – 91</td><td>72 – 77</td></tr><tr><td><span class="sz-badge">M</span></td><td>92 – 97</td><td>78 – 83</td></tr><tr><td><span class="sz-badge">L</span></td><td>98 – 104</td><td>84 – 89</td></tr><tr><td><span class="sz-badge">XL</span></td><td>105 – 111</td><td>90 – 97</td></tr></tbody>
+              <tbody>
+                <tr><td><span class="sz-badge">XS</span></td><td>80 – 85</td><td>66 – 71</td></tr>
+                <tr><td><span class="sz-badge">S</span></td><td>86 – 91</td><td>72 – 77</td></tr>
+                <tr><td><span class="sz-badge">M</span></td><td>92 – 97</td><td>78 – 83</td></tr>
+                <tr><td><span class="sz-badge">L</span></td><td>98 – 104</td><td>84 – 89</td></tr>
+                <tr><td><span class="sz-badge">XL</span></td><td>105 – 111</td><td>90 – 97</td></tr>
+              </tbody>
             </table>
-            <p class="size-guide-src">Source : <a href="https://www.decathlonpro.fr/pantalon-budo-noir-500-id-8558691.html" target="_blank" rel="noopener">Decathlon Pro – Pantalon budo Noir 500</a></p>
+            <p class="size-guide-src">Source : <a href="https://www.decathlonpro.fr/pantalon-budo-noir-500-id-8558691.html" target="_blank" rel="noopener">Decathlon Pro – Pantalon budo Noir 500</a></p>
           </div>
         </details>
       </div>
