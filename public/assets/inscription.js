@@ -819,57 +819,21 @@ function renderClothingOrder() {
         <strong>T-shirt club AFFBC</strong>
         <small>Tenue officielle noire validée</small>
         <small id="tshirt-stock-hint">${tshirtTotalStock == null ? 'Stock boutique indisponible.' : `Stock total boutique: ${tshirtTotalStock}`}</small>
+
         <details class="size-guide">
-          <summary>📏 Guide des tailles – T-shirt unisexe B&amp;C 190</summary>
-          <p class="size-guide-note">Mesurez votre tour de <strong>poitrine</strong> (partie la plus large) et votre <strong>tour de taille</strong> avec un mètre ruban.</p>
-          <table class="size-guide-table">
-            <thead><tr><th>Taille</th><th>Poitrine (cm)</th><th>Taille (cm)</th></tr></thead>
-            <tbody>
-              <tr><td>XS</td><td>84 – 87</td><td>70 – 73</td></tr>
-              <tr><td>S</td><td>88 – 91</td><td>74 – 77</td></tr>
-              <tr><td>M</td><td>92 – 95</td><td>78 – 81</td></tr>
-              <tr><td>L</td><td>96 – 103</td><td>82 – 89</td></tr>
-              <tr><td>XL</td><td>104 – 113</td><td>90 – 100</td></tr>
-              <tr><td>2XL</td><td>114 – 123</td><td>101 – 111</td></tr>
-              <tr><td>3XL</td><td>124 – 135</td><td>112 – 121</td></tr>
-            </tbody>
-          </table>
-          <p class="size-guide-src">Source : <a href="https://www.decathlonpro.fr/tee-shirt-mixte-190-noir-id-8568037.html" target="_blank" rel="noopener">Decathlon Pro – Tee-shirt B&amp;C 190 Noir</a></p>
-        </details>
-      </div>
-      <div class="order-input" data-label="P.U."><span>${p.tshirt.toFixed(2)} €</span></div>
-      <div class="order-input" data-label="Taille">
-        <select data-size-item="tshirt">
-          <option value="">Taille</option>
-          ${tshirtOptions}
-        </select>
-      </div>
-      <div class="order-input" data-label="Qté">
-        <input type="number" min="0" max="5" value="${typeInscription === 'nouvelle' ? 1 : 0}"
-               data-item="tshirt" style="width:60px"
-               oninput="updateSummary()">
-      </div>
-      <div class="order-input" data-label="Sous-total" id="tshirt-subtotal">—</div>
-    </div>
-    <div class="order-row">
-      <div>
-        <strong>Pantalon club AFFBC</strong>
-        <small>Pantalon de boxe noir</small>
-        <small id="pantalon-stock-hint">${pantalonTotalStock == null ? 'Stock boutique indisponible.' : `Stock total boutique: ${pantalonTotalStock}`}</small>
-        <details class="size-guide">
-          <summary>📏 Guide des tailles – Pantalon budo unisexe</summary>
-          <p class="size-guide-note">Mesurez votre <strong>tour de taille</strong> (au-dessus du nombril) et votre <strong>tour de hanches</strong> avec un mètre ruban.</p>
-          <table class="size-guide-table">
-            <thead><tr><th>Taille</th><th>Tour de taille (cm)</th><th>Tour de hanches (cm)</th></tr></thead>
-            <tbody>
-              <tr><td>XS</td><td>80 – 85</td><td>66 – 71</td></tr>
-              <tr><td>S</td><td>86 – 91</td><td>72 – 77</td></tr>
-              <tr><td>M</td><td>92 – 97</td><td>78 – 83</td></tr>
-              <tr><td>L</td><td>98 – 104</td><td>84 – 89</td></tr>
-              <tr><td>XL</td><td>105 – 111</td><td>90 – 97</td></tr>
-            </tbody>
-          </table>
-          <p class="size-guide-src">Source : <a href="https://www.decathlonpro.fr/pantalon-budo-noir-500-id-8558691.html" target="_blank" rel="noopener">Decathlon Pro – Pantalon budo Noir 500</a></p>
+          <summary>
+            <span class="sg-icon">📏</span>
+            <span class="sg-label">Guide des tailles — Pantalon budo unisexe</span>
+            <span class="sg-chevron">▸</span>
+          </summary>
+          <div class="size-guide-body">
+            <p class="size-guide-note">Mesurez votre <strong>tour de taille</strong> (au-dessus du nombril) et votre <strong>tour de hanches</strong> avec un mètre ruban.</p>
+            <table class="size-guide-table">
+              <thead><tr><th>Taille</th><th>Tour de taille (cm)</th><th>Tour de hanches (cm)</th></tr></thead>
+              <tbody><tr><td><span class="sz-badge">XS</span></td><td>80 – 85</td><td>66 – 71</td></tr><tr><td><span class="sz-badge">S</span></td><td>86 – 91</td><td>72 – 77</td></tr><tr><td><span class="sz-badge">M</span></td><td>92 – 97</td><td>78 – 83</td></tr><tr><td><span class="sz-badge">L</span></td><td>98 – 104</td><td>84 – 89</td></tr><tr><td><span class="sz-badge">XL</span></td><td>105 – 111</td><td>90 – 97</td></tr></tbody>
+            </table>
+            <p class="size-guide-src">Source : <a href="https://www.decathlonpro.fr/pantalon-budo-noir-500-id-8558691.html" target="_blank" rel="noopener">Decathlon Pro – Pantalon budo Noir 500</a></p>
+          </div>
         </details>
       </div>
       <div class="order-input" data-label="P.U."><span>${p.pantalon.toFixed(2)} €</span></div>
