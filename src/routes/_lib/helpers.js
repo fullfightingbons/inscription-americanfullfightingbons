@@ -1,6 +1,7 @@
 /**
- * Helpers partagés — isMinor, calculateTotals, normalizeInstallmentCount
- * Centralisés ici pour éviter la duplication entre inscription.js et status.js.
+ * Helpers partagés — isMinor, calculateTotals, normalizeInstallmentCount,
+ * findActiveExercise. Centralisés ici pour éviter la duplication entre
+ * inscription.js et status.js.
  */
 
 export function isMinor(birthDate) {
@@ -20,6 +21,24 @@ export function normalizeInstallmentCount(value) {
   const count = Number(value || 1);
   return count === 2 || count === 3 ? count : 1;
 }
+
+/**
+ * Retourne l'exercice comptable actif (statut = 'actif'), ou à défaut le plus
+ * récent. Utilisé à la fois lors de la soumission d'inscription et lors de la
+ * confirmation de paiement — d'où sa centralisation ici.
+ */
+export async function findActiveExercise(db) {
+  const active = await db
+    .prepare(`SELECT * FROM exercices WHERE statut = 'actif' ORDER BY date_debut DESC LIMIT 1`)
+    .first();
+  if (active?.id) return active;
+  return db.prepare(`SELECT * FROM exercices ORDER BY date_debut DESC LIMIT 1`).first();
+}
+
+// Montants de remise Pass Région réellement proposés par le formulaire
+// (cf. <select id="passRegionAmount"> dans index.html). Toute autre valeur
+// est rejetée pour empêcher une falsification du montant côté client.
+const ALLOWED_PASS_REGION_AMOUNTS = new Set([30, 60]);
 
 /**
  * Calcule les totaux à partir des tarifs chargés DEPUIS LA BASE (jamais du payload client).
@@ -55,9 +74,14 @@ export function calculateTotals(practice, pricing, clothing = {}, extraOrderItem
     throw new Error("Formule tarifaire invalide");
   }
 
-  const passRegionAmount = passRegionEnabled
-    ? Number(practice.passRegionAmount || 0)
-    : 0;
+  let passRegionAmount = 0;
+  if (passRegionEnabled) {
+    const requestedAmount = Number(practice.passRegionAmount || 0);
+    if (!ALLOWED_PASS_REGION_AMOUNTS.has(requestedAmount)) {
+      throw new Error("Montant de remise Pass Région invalide");
+    }
+    passRegionAmount = requestedAmount;
+  }
   const cotisation = Math.max(0, baseCotisation - passRegionAmount);
 
   const tshirtQty = Math.max(
