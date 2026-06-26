@@ -24,6 +24,7 @@ interface Env {
   SESSION_SECRET?: string;
   HELLOASSO_CLIENT_ID?: string;
   HELLOASSO_CLIENT_SECRET?: string;
+  HELLOASSO_ENV?: string;
   GOOGLE_PLACES_API_KEY?: string;
   SITE_PUBLIC_URL?: string;
   /** Set to "dev" in wrangler.json vars to disable the Secure cookie flag locally */
@@ -677,6 +678,10 @@ function resolvePublicBaseUrl(settings: Record<string, string>, env: Env, reques
   throw new Error("SITE_PUBLIC_URL manquant pour initialiser le checkout HelloAsso.");
 }
 
+function getHelloAssoBaseUrl(env: Env): string {
+  return env.HELLOASSO_ENV === "sandbox" ? "https://api.helloasso-sandbox.com" : "https://api.helloasso.com";
+}
+
 async function fetchHelloAssoAccessToken(env: Env): Promise<string> {
   const clientId = sanitizeText(env.HELLOASSO_CLIENT_ID, 200);
   const clientSecret = sanitizeText(env.HELLOASSO_CLIENT_SECRET, 240);
@@ -689,7 +694,7 @@ async function fetchHelloAssoAccessToken(env: Env): Promise<string> {
   body.set("client_id", clientId);
   body.set("client_secret", clientSecret);
 
-  const response = await fetch("https://api.helloasso.com/oauth2/token", {
+  const response = await fetch(`${getHelloAssoBaseUrl(env)}/oauth2/token`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: body.toString(),
@@ -707,7 +712,7 @@ async function createHelloAssoCheckoutIntent(
   accessToken: string,
   values: Row
 ): Promise<Row> {
-  const response = await fetch(`https://api.helloasso.com/v5/organizations/${encodeURIComponent(organizationSlug)}/checkout-intents`, {
+  const response = await fetch(`${getHelloAssoBaseUrl(env)}/v5/organizations/${encodeURIComponent(organizationSlug)}/checkout-intents`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${accessToken}`,
@@ -733,7 +738,7 @@ async function getHelloAssoCheckoutIntent(
   checkoutIntentId: string
 ): Promise<Row> {
   const response = await fetch(
-    `https://api.helloasso.com/v5/organizations/${encodeURIComponent(organizationSlug)}/checkout-intents/${encodeURIComponent(
+    `${getHelloAssoBaseUrl(env)}/v5/organizations/${encodeURIComponent(organizationSlug)}/checkout-intents/${encodeURIComponent(
       checkoutIntentId
     )}`,
     {
