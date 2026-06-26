@@ -109,18 +109,13 @@ export function calculateTotals(practice, pricing, clothing = {}, extraOrderItem
   }
   const cotisation = Math.max(0, baseCotisation - passRegionAmount);
 
-  const tshirtQty = Math.max(
-    Number(clothing.tshirtQty || 0),
-    typeInscription === "nouvelle" ? 1 : 0,
-  );
-  const pantalonQty = Math.max(
-    Number(clothing.pantalonQty || 0),
-    typeInscription === "nouvelle" ? 1 : 0,
-  );
+  const tshirtQty   = Math.max(0, Number(clothing.tshirtQty   || 0));
+  const pantalonQty = Math.max(0, Number(clothing.pantalonQty || 0));
 
-  // Le kit tenue n'est facturé que pour les nouvelles adhésions.
-  // Pour un renouvellement (y compris membres du bureau), il doit être 0.
-  const newMemberKit    = typeInscription === "nouvelle" ? Number(pricing.newMemberKit || 0) : 0;
+  // Pas de supplément forfaitaire "kit" : le coût de la tenue est uniquement
+  // la somme des articles commandés (tshirt × prix + pantalon × prix).
+  // Pour les nouvelles adhésions, la validation côté formulaire impose
+  // tshirtQty ≥ 1 et pantalonQty ≥ 1 avant soumission.
   const passport        = passportEnabled ? Number(pricing.passport || 25) : 0;
   const pricingTshirt   = Number(pricing.tshirt   || 25);
   const pricingPantalon = Number(pricing.pantalon || 15);
@@ -161,7 +156,6 @@ export function calculateTotals(practice, pricing, clothing = {}, extraOrderItem
   return {
     cotisation,
     passRegionAmount,
-    newMemberKit,
     passport,
     clothingTotal,
     extraProductsTotal,
@@ -170,7 +164,7 @@ export function calculateTotals(practice, pricing, clothing = {}, extraOrderItem
     pricingTshirt,
     pricingPantalon,
     orderItems,
-    total: cotisation + newMemberKit + passport + clothingTotal + extraProductsTotal,
+    total: cotisation + passport + clothingTotal + extraProductsTotal,
     formulaLabel: formulaLabelMap[formula] || formula,
   };
 }
