@@ -9,6 +9,8 @@ import { onRequestPost as inscriptionSubmitHandler } from "./routes/api/public/i
 import { onRequestGet as helloAssoStatusHandler } from "./routes/api/public/payment/helloasso/status.js";
 import { onRequestPost as helloAssoNotificationHandler } from "./routes/api/public/payment/helloasso/notification.js";
 import { onRequestGet as tarifsHandler } from "./routes/api/public/tarifs";
+import { handleCleanupCron } from "./routes/cron/cleanup-abandoned.js";
+
 
 interface Env {
   ASSETS: Fetcher;
@@ -1498,25 +1500,25 @@ export {
 };
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-    if (url.pathname === "/inscription-config" && request.method === "GET") {
-      try {
-        return withHeaders(await inscriptionConfigHandler({ request, env }), request);
-      } catch (caught) {
-        const message = caught instanceof Error ? caught.message : "Erreur interne";
-        return error(message, 500, request);
-      }
-    }
-    if (url.pathname.startsWith("/api/")) {
-      try {
-        return await routeApi(request, env, url.pathname);
-      } catch (caught) {
-        const message = caught instanceof Error ? caught.message : "Erreur interne";
-        if (message === "Unauthorized") return error(message, 401, request);
-        return error(message, 500, request);
-      }
-    }
-    return env.ASSETS.fetch(request);
-  },
+async fetch(request: Request, env: Env): Promise<Response> {
+const url = new URL(request.url);
+if (url.pathname === "/inscription-config" && request.method === "GET") {
+try {
+return withHeaders(await inscriptionConfigHandler({ request, env }), request);
+} catch (caught) {
+const message = caught instanceof Error ? caught.message : "Erreur interne";
+return error(message, 500, request);
+}
+}
+if (url.pathname.startsWith("/api/")) {
+try {
+return await routeApi(request, env, url.pathname);
+} catch (caught) {
+const message = caught instanceof Error ? caught.message : "Erreur interne";
+if (message === "Unauthorized") return error(message, 401, request);
+return error(message, 500, request);
+}
+}
+return env.ASSETS.fetch(request);
+},
 };
