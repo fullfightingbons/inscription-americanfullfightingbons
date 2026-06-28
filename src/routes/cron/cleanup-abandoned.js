@@ -1,31 +1,33 @@
 /**
  * AFFBC — Cron : purge des inscriptions abandonnées
  *
- * Déclenché par le cron Cloudflare Workers (voir wrangler.json → triggers.crons).
- * Supprime les fichiers R2 et marque comme "abandonnee" les inscriptions restées
- * bloquées en statut "paiement_en_attente" sans paiement confirmé au-delà de la
- * durée de grâce (ABANDONED_AFTER_HOURS, défaut 48 h).
+ * À placer dans : inscription-americanfullfightingbons/src/routes/cron/cleanup-abandoned.js
  *
- * Statuts couverts :
- *  - "paiement_en_attente" : checkout HelloAsso créé mais jamais validé
- *  - "brouillon"           : ligne créée mais étapes suivantes échouées (normalement
- *                            déjà passée en "echec_creation" par le handler, mais on
- *                            couvre le cas d'une coupure entre les deux)
- *  - "echec_creation"      : inscription échouée (fichiers déjà supprimés par le
- *                            handler, mais on nettoie la ligne DB si trop vieille)
+ * Déclenché automatiquement par Cloudflare Workers Cron Triggers
+ * selon le planning configuré dans wrangler.json (triggers.crons).
  *
- * Ce handler est idempotent : il peut être appelé plusieurs fois sans effet de bord.
+ * Cible les inscriptions restées bloquées au-delà de ABANDONED_AFTER_HOURS
+ * sans qu'un paiement HelloAsso ait été confirmé (adherent_id toujours NULL) :
+ *
+ *   - "paiement_en_attente" : checkout HelloAsso créé, utilisateur parti sans payer
+ *   - "brouillon"           : handler a planté entre l'INSERT et le checkout (rare)
+ *   - "echec_creation"      : handler a déjà nettoyé les fichiers, on purge la ligne DB
+ *
+ * Pour chacune :
+ *   1. Supprime les fichiers R2 référencés dans documents_json
+ *   2. Passe le statut à "abandonnee" et vide documents_json
+ *
+ * Idempotent : peut être appelé plusieurs fois sans effet de bord.
  */
 
-const ABANDONED_AFTER_HOURS = 48; // grâce de 48 h avant purge
-const BATCH_SIZE = 50;             // max d'inscriptions traitées par exécution cron
+const ABANDONED_AFTER_HOURS = 48; // délai de grâce avant purge (heures)
+const BATCH_SIZE = 50;            // max d'inscriptions traitées par exécution
 
 /**
- * Supprime les fichiers R2 associés à une inscription.
- * Les clés sont stockées dans documents_json (objet plat : { photoIdentity, medicalCertificate, … }).
- * Chaque entrée a la forme { bucket: "fullfighting-pdf" | "storage", key: "public-inscriptions/…" }.
+ * Supprime les fichiers R2 d'une inscription à partir de son documents_json.
+ * Chaque entrée a la forme : { bucket: "fullfighting-pdf"|"storage", key: "public-inscriptions/…" }
  */
-async function deleteRegistrationFiles(env, documentsJson, registrationId) {
+async function deleteRegistrationFiles(env, documentsJson) {
   let docs = {};
   try {
     docs = typeof documentsJson === "string"
@@ -38,6 +40,7 @@ async function deleteRegistrationFiles(env, documentsJson, registrationId) {
   const results = [];
   for (const [docKey, doc] of Object.entries(docs)) {
     if (!doc?.key) continue;
+    // Le champ "bucket" contient le nom logique ("fullfighting-pdf" ou "storage")
     const bucket = doc.bucket === "storage" ? env.R2_STORAGE : env.R2_PDF;
     if (!bucket) {
       results.push({ docKey, key: doc.key, status: "no_bucket" });
@@ -50,23 +53,17 @@ async function deleteRegistrationFiles(env, documentsJson, registrationId) {
       results.push({ docKey, key: doc.key, status: "error", error: err?.message });
     }
   }
-
-  // Supprimer aussi le PDF d'inscription généré si présent dans R2
-  // (stocké sous adherents/{adherentId}/inscription-{registrationId}.pdf)
-  // → Dans ce cas aucun adhérent n'a été créé (pas de paiement), donc pas de
-  //   pdf_storage_path à chercher. Rien à faire.
-
   return results;
 }
 
 /**
  * Traite un lot d'inscriptions abandonnées.
- * @returns {{ processed: number, errors: number, details: object[] }}
+ * @returns {{ processed: number, errors: number, details: Array }}
  */
 async function processAbandonedBatch(env, db, cutoffIso) {
   const rows = await db
     .prepare(
-      `SELECT id, statut, documents_json, adherent_id, created_at, updated_at
+      `SELECT id, statut, documents_json
        FROM inscriptions_publiques
        WHERE statut IN ('paiement_en_attente', 'brouillon', 'echec_creation')
          AND adherent_id IS NULL
@@ -86,10 +83,11 @@ async function processAbandonedBatch(env, db, cutoffIso) {
 
   for (const row of inscriptions) {
     try {
-      // 1. Suppression des fichiers R2
-      const fileDeletions = await deleteRegistrationFiles(env, row.documents_json, row.id);
+      // 1. Supprimer les fichiers R2 (seulement s'il y en a)
+      const fileDeletions = await deleteRegistrationFiles(env, row.documents_json);
 
-      // 2. Mise à jour du statut en DB
+      // 2. Marquer en "abandonnee" et vider documents_json pour éviter
+      //    toute tentative de suppression ultérieure
       await db
         .prepare(
           `UPDATE inscriptions_publiques
@@ -99,18 +97,13 @@ async function processAbandonedBatch(env, db, cutoffIso) {
            WHERE id = ? AND adherent_id IS NULL`,
         )
         .bind(
-          JSON.stringify({}), // on vide documents_json pour éviter des tentatives futures
+          JSON.stringify({}),
           new Date().toISOString(),
           row.id,
         )
         .run();
 
-      details.push({
-        id: row.id,
-        statut: row.statut,
-        files: fileDeletions,
-        status: "purged",
-      });
+      details.push({ id: row.id, statut: row.statut, files: fileDeletions, status: "purged" });
       processed++;
     } catch (err) {
       console.error(`[cron/cleanup] Erreur pour inscription ${row.id}:`, err?.message ?? String(err));
@@ -123,12 +116,11 @@ async function processAbandonedBatch(env, db, cutoffIso) {
 }
 
 /**
- * Point d'entrée du Cron Trigger Cloudflare Workers.
- * Appelé via l'export "scheduled" du worker principal (src/index.ts).
+ * Point d'entrée appelé depuis l'export "scheduled" de src/index.ts.
  */
 export async function handleCleanupCron(env) {
   if (!env.DB) {
-    console.error("[cron/cleanup] D1 binding manquant");
+    console.error("[cron/cleanup] D1 binding (DB) manquant");
     return { ok: false, error: "D1 binding manquant" };
   }
 
@@ -136,12 +128,8 @@ export async function handleCleanupCron(env) {
   const cutoffIso = cutoff.toISOString();
 
   console.log(`[cron/cleanup] Démarrage — cutoff : ${cutoffIso}`);
-
   const result = await processAbandonedBatch(env, env.DB, cutoffIso);
-
-  console.log(
-    `[cron/cleanup] Terminé — ${result.processed} purgées, ${result.errors} erreurs`,
-  );
+  console.log(`[cron/cleanup] Terminé — ${result.processed} purgées, ${result.errors} erreurs`);
 
   return {
     ok: true,
