@@ -9,12 +9,14 @@ import { onRequestPost as inscriptionSubmitHandler } from "./routes/api/public/i
 import { onRequestGet as helloAssoStatusHandler } from "./routes/api/public/payment/helloasso/status.js";
 import { onRequestPost as helloAssoNotificationHandler } from "./routes/api/public/payment/helloasso/notification.js";
 import { onRequestGet as tarifsHandler } from "./routes/api/public/tarifs";
+// ─── Cron : purge des inscriptions abandonnées (fichiers R2 orphelins) ────────
 import { handleCleanupCron } from "./routes/cron/cleanup-abandoned.js";
-
 
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
+  R2_STORAGE: R2Bucket;
+  R2_PDF: R2Bucket;
   AFFBC_DB?: D1Database;
   SITE_NAME?: string;
   CONTACT_EMAIL?: string;
@@ -1193,7 +1195,6 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   if (!user) return error("Identifiants invalides.", 401, request);
   if (!(await verifyPassword(password, user.password_hash))) return error("Identifiants invalides.", 401, request);
 
-  // Connexion réussie : réinitialiser le rate limiter
   await resetLoginRateLimit(loginIp, env);
 
   const token = await createSessionToken(
@@ -1288,7 +1289,6 @@ async function handleAdminSave(request: Request, env: Env): Promise<Response> {
   const table = String(payload.table || "") as keyof typeof EDITABLE_TABLES;
   const action = String(payload.action || "");
 
-  // Traitement mark-message en priorité (pas de table nécessaire)
   if (action === "mark-message") {
     const id = payload.id;
     const status = sanitizeText(payload.status, 30);
@@ -1357,8 +1357,6 @@ async function handleAdminSave(request: Request, env: Env): Promise<Response> {
   return error("Action non supportée.");
 }
 
-// ─── Login pour le Visual Builder (password seul → Bearer token) ─────────────
-
 async function handleAdminLogin(request: Request, env: Env): Promise<Response> {
   const loginIp = request.headers.get("cf-connecting-ip") ?? "unknown";
   if (!(await checkLoginRateLimit(loginIp, env))) {
@@ -1368,7 +1366,6 @@ async function handleAdminLogin(request: Request, env: Env): Promise<Response> {
   const password = String(payload.password || "");
   if (!password) return error("Mot de passe requis.");
 
-  // Cherche n'importe quel admin actif dont le mot de passe correspond
   const users = await readTable<Row>(
     env.DB,
     "SELECT * FROM admin_users WHERE active = 1"
@@ -1382,16 +1379,12 @@ async function handleAdminLogin(request: Request, env: Env): Promise<Response> {
   }
   if (!matched) return error("Mot de passe incorrect.", 401);
 
-  // Réutilise le même mécanisme HMAC que les sessions cookie,
-  // mais on le renvoie en tant que token Bearer (JSON).
   const token = await createSessionToken(
     { userId: String(matched.id), expiresAt: Date.now() + SESSION_TTL_MS },
     env
   );
   return ok({ token });
 }
-
-// ─── Vérification Bearer token (pour les routes /api/admin/*) ────────────────
 
 async function getUserFromBearer(request: Request, env: Env): Promise<Row | null> {
   const authHeader = request.headers.get("Authorization") || "";
@@ -1442,14 +1435,11 @@ async function routeApi(request: Request, env: Env, pathname: string): Promise<R
   if (pathname === "/api/auth/password" && request.method === "POST") {
     return handleChangePassword(request, env);
   }
-  // Visual Builder login (password seul, retourne un Bearer token)
   if (pathname === "/api/admin/login" && request.method === "POST") {
     return handleAdminLogin(request, env);
   }
 
-  // Routes admin : accepte aussi bien le cookie de session que le Bearer token
   if (pathname === "/api/admin/bootstrap" && request.method === "GET") {
-    // Tente d'abord le cookie, puis le Bearer token
     const cookieUser = await getCurrentUser(request, env);
     if (!cookieUser) {
       const bearerUser = await getUserFromBearer(request, env);
@@ -1500,25 +1490,43 @@ export {
 };
 
 export default {
-async fetch(request: Request, env: Env): Promise<Response> {
-const url = new URL(request.url);
-if (url.pathname === "/inscription-config" && request.method === "GET") {
-try {
-return withHeaders(await inscriptionConfigHandler({ request, env }), request);
-} catch (caught) {
-const message = caught instanceof Error ? caught.message : "Erreur interne";
-return error(message, 500, request);
-}
-}
-if (url.pathname.startsWith("/api/")) {
-try {
-return await routeApi(request, env, url.pathname);
-} catch (caught) {
-const message = caught instanceof Error ? caught.message : "Erreur interne";
-if (message === "Unauthorized") return error(message, 401, request);
-return error(message, 500, request);
-}
-}
-return env.ASSETS.fetch(request);
-},
+  // ─── Handler HTTP principal ─────────────────────────────────────────────────
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === "/inscription-config" && request.method === "GET") {
+      try {
+        return withHeaders(await inscriptionConfigHandler({ request, env }), request);
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : "Erreur interne";
+        return error(message, 500, request);
+      }
+    }
+    if (url.pathname.startsWith("/api/")) {
+      try {
+        return await routeApi(request, env, url.pathname);
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : "Erreur interne";
+        if (message === "Unauthorized") return error(message, 401, request);
+        return error(message, 500, request);
+      }
+    }
+    return env.ASSETS.fetch(request);
+  },
+
+  // ─── Cron Trigger : purge quotidienne des inscriptions abandonnées ──────────
+  // Déclenché automatiquement selon le planning de wrangler.json (triggers.crons).
+  // Supprime les fichiers R2 (photo ID, certificat, justificatifs) des inscriptions
+  // restées en "paiement_en_attente" plus de 48 h sans paiement confirmé, puis
+  // passe leur statut à "abandonnee" et vide documents_json.
+  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+    try {
+      const result = await handleCleanupCron(env);
+      console.log("[scheduled] cleanup-abandoned:", JSON.stringify(result));
+    } catch (err) {
+      console.error(
+        "[scheduled] cleanup-abandoned erreur:",
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  },
 };
