@@ -109,13 +109,26 @@ export function calculateTotals(practice, pricing, clothing = {}, extraOrderItem
   }
   const cotisation = Math.max(0, baseCotisation - passRegionAmount);
 
-  const tshirtQty   = Math.max(0, Number(clothing.tshirtQty   || 0));
-  const pantalonQty = Math.max(0, Number(clothing.pantalonQty || 0));
+  const isNewMember = typeInscription === "nouvelle";
 
-  // Pas de supplément forfaitaire "kit" : le coût de la tenue est uniquement
-  // la somme des articles commandés (tshirt × prix + pantalon × prix).
-  // Pour les nouvelles adhésions, la validation côté formulaire impose
-  // tshirtQty ≥ 1 et pantalonQty ≥ 1 avant soumission.
+  let tshirtQty   = Math.max(0, Number(clothing.tshirtQty   || 0));
+  let pantalonQty = Math.max(0, Number(clothing.pantalonQty || 0));
+
+  // Pour une nouvelle adhésion, la tenue complète (1 t-shirt + 1 pantalon)
+  // est obligatoire. Cette règle est aussi validée côté formulaire, mais on
+  // l'impose ICI côté serveur pour empêcher un appel API direct de réduire
+  // la facture en passant des quantités à 0 — même classe de faille que
+  // celle déjà corrigée pour passRegionAmount.
+  if (isNewMember) {
+    tshirtQty   = Math.max(1, tshirtQty);
+    pantalonQty = Math.max(1, pantalonQty);
+  }
+
+  // Supplément "tenue nouvel adhérent" : ajouté uniquement pour les nouvelles
+  // adhésions, en plus du coût des articles commandés (tshirt × prix +
+  // pantalon × prix). Utilisé tel quel par la génération de PDF et la
+  // ventilation comptable (cf. _lib/pdf.js et payment/helloasso/status.js).
+  const newMemberKit    = isNewMember ? Number(pricing.newMemberKit || 0) : 0;
   const passport        = passportEnabled ? Number(pricing.passport || 25) : 0;
   const pricingTshirt   = Number(pricing.tshirt   || 25);
   const pricingPantalon = Number(pricing.pantalon || 15);
@@ -157,6 +170,7 @@ export function calculateTotals(practice, pricing, clothing = {}, extraOrderItem
     cotisation,
     passRegionAmount,
     passport,
+    newMemberKit,
     clothingTotal,
     extraProductsTotal,
     tshirtQty,
@@ -164,7 +178,7 @@ export function calculateTotals(practice, pricing, clothing = {}, extraOrderItem
     pricingTshirt,
     pricingPantalon,
     orderItems,
-    total: cotisation + passport + clothingTotal + extraProductsTotal,
+    total: cotisation + passport + newMemberKit + clothingTotal + extraProductsTotal,
     formulaLabel: formulaLabelMap[formula] || formula,
   };
 }

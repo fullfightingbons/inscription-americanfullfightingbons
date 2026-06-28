@@ -637,9 +637,22 @@ export async function onRequestPost(context) {
     );
     totals.certificateRequired = validation.certificateRequired;
 
+    // ── Quantités tenue effectivement facturées (post-minimum serveur) ───────
+    // calculateTotals() impose tshirtQty/pantalonQty ≥ 1 pour une nouvelle
+    // adhésion, même si le payload envoyait 0 ou omettait ces champs. On
+    // répercute ces quantités effectives sur le contrôle de stock/taille
+    // ci-dessous : si le client n'a pas fourni de taille pour un article
+    // pourtant facturé, l'inscription est rejetée plutôt que silencieusement
+    // acceptée sans taille ni réservation de stock.
+    const effectiveClothingOrder = {
+      ...payload.clothingOrder,
+      tshirtQty:   totals.tshirtQty,
+      pantalonQty: totals.pantalonQty,
+    };
+
     try {
       const clothingStock = await fetchBoutiqueClothingStock(context.env);
-      assertClothingOrderStock(clothingStock, payload.clothingOrder);
+      assertClothingOrderStock(clothingStock, effectiveClothingOrder);
       const boutiqueProducts = await fetchBoutiqueProducts(context.env);
       assertAdditionalOrderItemsStock(boutiqueProducts, totals.orderItems);
     } catch (error) {
@@ -677,7 +690,7 @@ export async function onRequestPost(context) {
       adherent_id:                 null,
       helloasso_checkout_intent_id: null,
       helloasso_url:               null,
-      dossier_json:                JSON.stringify({ ...payload, computedTotals: totals }),
+      dossier_json:                JSON.stringify({ ...payload, clothingOrder: effectiveClothingOrder, computedTotals: totals }),
       documents_json:              JSON.stringify({}),
       exercice_id:                 exercise?.id || null,
       created_at:                  draftNow,
