@@ -1510,7 +1510,7 @@ export default {
         return error(message, 500, request);
       }
     }
-    return env.ASSETS.fetch(request);
+    return withHeaders(await env.ASSETS.fetch(request), request);
   },
 
   // ─── Cron Trigger : purge quotidienne des inscriptions abandonnées ──────────
