@@ -372,6 +372,39 @@ a{color:inherit}
 .step-panel{display:none}
 .step-panel.active{display:block}
 
+.closed-banner{
+  max-width:760px;
+  margin:0 auto 28px;
+  padding:0 28px;
+}
+.closed-banner-card{
+  background:var(--paper-strong);
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow);
+  padding:40px 32px;
+  text-align:center;
+}
+.closed-banner-icon{
+  font-size:38px;
+  margin-bottom:10px;
+}
+.closed-banner-card h2{
+  margin:0 0 10px;
+  color:var(--navy);
+  font-family:"Oswald","Segoe UI",sans-serif;
+  letter-spacing:.02em;
+}
+.closed-banner-card p{
+  margin:0 0 6px;
+  color:var(--muted);
+  font-size:15px;
+  line-height:1.5;
+}
+.closed-banner-contact{
+  font-size:13px !important;
+}
+
 .step-heading{
   display:flex;
   gap:16px;

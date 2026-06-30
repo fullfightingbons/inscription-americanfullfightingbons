@@ -986,6 +986,21 @@ function applyBranding() {
   syncBureauFormulaOption();
 }
 
+function applyClosedState() {
+  const banner = g('inscription-closed');
+  const main = g('signup-main');
+  if (main) main.hidden = true;
+  if (banner) {
+    banner.hidden = false;
+    const msgEl = g('inscription-closed-message');
+    if (msgEl && CONFIG?.closedMessage) msgEl.textContent = CONFIG.closedMessage;
+    const contactEl = g('closed-club-contact');
+    if (contactEl) {
+      contactEl.textContent = [CONFIG?.clubPhone, CONFIG?.clubEmail].filter(Boolean).join(' · ');
+    }
+  }
+}
+
 // ─── Construction du payload JSON final ──────────────────────────────────────
 
 function buildPayload() {
@@ -1283,6 +1298,16 @@ async function loadTarifs() {
 async function init() {
   // 1. Charger la config
   await loadConfig();
+
+  // 1bis. Si les inscriptions sont fermées, on affiche le bandeau et on
+  // n'initialise rien d'autre (pas de formulaire, pas de handlers de
+  // soumission) : c'est une mesure d'UX, la vraie protection est côté
+  // serveur dans /api/public/inscription (POST).
+  if (CONFIG && CONFIG.isOpen === false) {
+    applyClosedState();
+    return;
+  }
+
   await loadTarifs();
 
   // 2. Vérifier si on revient de HelloAsso
