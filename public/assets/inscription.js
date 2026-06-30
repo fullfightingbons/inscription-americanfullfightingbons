@@ -1053,8 +1053,8 @@ function buildPayload() {
       qsSport: qs,
     },
     clothingOrder: {
-      tshirtQty,
-      pantalonQty,
+      tshirtQty: clothing.tshirtQty,
+      pantalonQty: clothing.pantalonQty,
       tshirtSize: clothing.tshirtSize,
       pantalonSize: clothing.pantalonSize,
     },
