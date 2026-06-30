@@ -21,6 +21,7 @@ import {
   fetchBoutiqueClothingStock,
   fetchBoutiqueProducts,
 } from "../../_lib/boutique-stock.js";
+import { finalizeFreeRegistration } from "../../_lib/free-registration.js";
 
 const MAX_FILE_SIZE = 8 * 1024 * 1024; // 8 Mo
 const FETCH_TIMEOUT_MS = 12_000; // 12 s pour les appels externes
@@ -755,6 +756,38 @@ export async function onRequestPost(context) {
     if (payload.practice?.formulaCode === "pro" || payload.practice?.formulaCode === "cse_thales") {
       uploadedDocuments.proofDocument = await uploadRequiredFile(context.env, registrationId, formData.get("proProofDocument"), "justificatif-tarif", false);
       uploadedFileRefs.push(uploadedDocuments.proofDocument);
+    }
+
+    // ── Cas particulier : dossier au montant nul (tarif "Membres du Bureau") ──
+    // Un paiement HelloAsso de 0 € est impossible à créer. Pour ce tarif
+    // spécifiquement (déjà vérifié plus haut : renouvellement + discipline
+    // "membre du bureau"), on valide directement le dossier sans paiement
+    // plutôt que de bloquer l'adhérent avec une erreur. Pour toute AUTRE
+    // formule, un montant nul reste une anomalie de configuration tarifaire
+    // et continue de lever une erreur (cf. createHelloAssoCheckout) — on ne
+    // contourne le paiement que pour ce cas explicitement autorisé.
+    if (Math.round(totals.total * 100) <= 0 && payload.practice.formulaCode === "bureau") {
+      await context.env.DB.prepare(
+        `UPDATE inscriptions_publiques SET documents_json = ?, updated_at = ? WHERE id = ?`,
+      ).bind(JSON.stringify(uploadedDocuments), new Date().toISOString(), registrationId).run();
+
+      const { adherentId, emailStatus } = await finalizeFreeRegistration(
+        context.env,
+        context.env.DB,
+        registrationId,
+        payload,
+        totals,
+      );
+
+      await writeAuditLog(context.env.DB, {
+        action:     "public.inscription_gratuite_validee",
+        entityType: "inscriptions_publiques",
+        entityId:   registrationId,
+        details:    { email: draftRow.email, formula: draftRow.formule_code, paymentMethod: "gratuit", adherentId, emailStatus },
+        ip:         getClientIp(context.request),
+      }).catch(() => {});
+
+      return json({ data: { registrationId, total: totals.total, free: true, adherentId, helloAssoUrl: null }, error: null });
     }
 
     // ── Création de la session de paiement HelloAsso ─────────────────────────

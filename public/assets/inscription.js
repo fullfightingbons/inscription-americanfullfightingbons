@@ -1117,7 +1117,32 @@ async function submitForm(event) {
       throw new Error(data?.error || `Erreur serveur (${res.status})`);
     }
 
-    const { helloAssoUrl, registrationId } = data.data || {};
+    const { helloAssoUrl, registrationId, free } = data.data || {};
+
+    if (free) {
+      // Dossier validé immédiatement (tarif Membres du Bureau, gratuit) :
+      // pas de paiement HelloAsso, on affiche directement la confirmation.
+      clearDraft();
+      const form = g('signup-form');
+      const successPanel = g('success-panel');
+      if (form) form.hidden = true;
+      if (successPanel) {
+        successPanel.hidden = false;
+        successPanel.innerHTML = `
+          <div class="hero-pill">✅ Dossier validé</div>
+          <h2>Inscription validée !</h2>
+          <p>Votre renouvellement au tarif Membres du Bureau a bien été enregistré, sans paiement requis.</p>
+          <p>Votre fiche adhérent a été créée dans le logiciel de gestion du club.</p>
+          <div class="success-note">
+            📧 Le club a été notifié par email. N'hésitez pas à les contacter si vous avez des questions.
+          </div>
+          <div class="success-actions" style="margin-top:18px">
+            <button type="button" class="btn" onclick="window.location.reload()">Déposer une autre inscription</button>
+          </div>
+        `;
+      }
+      return;
+    }
 
     if (!helloAssoUrl) {
       throw new Error('Lien de paiement HelloAsso non reçu. Veuillez réessayer ou contacter le club.');
