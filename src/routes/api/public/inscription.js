@@ -138,6 +138,31 @@ function buildInstallmentPlan(totalCents, installmentCount) {
   };
 }
 
+// ─── Statut ouvert / fermé des inscriptions ───────────────────────────────────
+
+/**
+ * Lit le flag club_info.public_inscription_enabled.
+ * Par défaut (clé absente) : ouvert, pour ne jamais bloquer silencieusement
+ * une installation existante qui n'aurait pas encore cette clé en base.
+ */
+async function loadInscriptionStatus(db) {
+  try {
+    const result = await db
+      .prepare(`SELECT cle, valeur FROM club_info WHERE cle IN ('public_inscription_enabled', 'public_inscription_closed_message')`)
+      .all();
+    const info = Object.fromEntries((result.results || []).map((r) => [r.cle, r.valeur]));
+    const isOpen = info.public_inscription_enabled === undefined
+      ? true
+      : !["0", "false", "non", "off"].includes(String(info.public_inscription_enabled).trim().toLowerCase());
+    return {
+      isOpen,
+      closedMessage: info.public_inscription_closed_message || "Les inscriptions sont actuellement fermées. Revenez bientôt !",
+    };
+  } catch {
+    return { isOpen: true, closedMessage: "" };
+  }
+}
+
 // ─── Chargement des tarifs depuis D1 (source de vérité) ──────────────────────
 
 async function loadPricingFromDb(db) {
@@ -582,6 +607,15 @@ async function findMatchingAdherent(db, payload) {
 
 export async function onRequestPost(context) {
   if (!context.env.DB) return badRequest("D1 binding is missing", 500);
+
+  // ── Verrou inscriptions ouvertes/fermées ──────────────────────────────────
+  // Vérifié en tout premier, avant même de parser le formulaire : un visiteur
+  // ne doit jamais pouvoir soumettre une inscription tant que c'est fermé,
+  // même en rejouant une requête ou en contournant le frontend.
+  const inscriptionStatus = await loadInscriptionStatus(context.env.DB);
+  if (!inscriptionStatus.isOpen) {
+    return json({ error: inscriptionStatus.closedMessage, closed: true }, { status: 423 });
+  }
 
   // Suivi pour nettoyage en cas d'échec après le point de non-retour (voir catch
   // final) : une fois la ligne "brouillon" insérée et/ou des fichiers uploadés

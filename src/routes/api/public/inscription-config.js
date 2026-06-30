@@ -44,6 +44,8 @@ const DEFAULT_CONFIG = {
     paypalClientId:  "",
   },
   orderProducts: [],
+  isOpen: true,
+  closedMessage: "Les inscriptions sont actuellement fermées. Revenez bientôt !",
 };
 
 function buildBank(clubInfo = {}, env = {}) {
@@ -92,6 +94,10 @@ function buildConfig(clubInfo = {}, env = {}) {
       pantalon:         Number(clubInfo.public_inscription_pantalon          || jsonPricing.pantalon     || DEFAULT_CONFIG.pricing.pantalon),
     },
     bank: buildBank(clubInfo, env),
+    isOpen: clubInfo.public_inscription_enabled === undefined
+      ? DEFAULT_CONFIG.isOpen
+      : !["0", "false", "non", "off"].includes(String(clubInfo.public_inscription_enabled).trim().toLowerCase()),
+    closedMessage: clubInfo.public_inscription_closed_message || DEFAULT_CONFIG.closedMessage,
     paymentProviders: {
       currency:         env.PAYMENT_CURRENCY || DEFAULT_CONFIG.paymentProviders.currency,
       stripeEnabled:    Boolean(env.STRIPE_SECRET_KEY),
