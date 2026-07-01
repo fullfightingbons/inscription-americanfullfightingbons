@@ -5,21 +5,231 @@
  * Reproduit fidèlement la mise en page :
  *   – Bandeau rouge header + badge vert "DOSSIER VALIDÉ"
  *   – Bandeau doré récapitulatif (formule / cotisation / tenue / total)
- *   – S1 Identité  S2 Coordonnées  S3 Pratique  S4 Tenue
+ *   – S1 Identité (avec photo d'identité embarquée si disponible)
+ *   – S2 Coordonnées  S3 Pratique  S4 Tenue
  *   – S5 Questionnaire santé  S6 Engagements & signature
  *   – Footer bleu marine
  *
  * Contraintes Workers :
  *   – Pas de DOM, pas de canvas, pas de require() Node
- *   – Uniquement fetch, crypto, TextEncoder disponibles
+ *   – Uniquement fetch, crypto, TextEncoder, CompressionStream/DecompressionStream
  *   – Polices : Helvetica (intégrée PDF Type1), Times-Italic pour la signature
  *
+ * Intégration de la photo d'identité :
+ *   Le PDF est écrit "à la main" (assemblage bas niveau des objets PDF), sans
+ *   bibliothèque tierce. Pour embarquer une vraie image (et non plus un simple
+ *   cadre vide), on décode :
+ *     – JPEG : on ne fait QUE lire les dimensions (marqueur SOFn) — les octets
+ *       JPEG bruts sont ensuite embarqués tels quels via le filtre PDF
+ *       /DCTDecode (le format JPEG est justement ce que /DCTDecode attend).
+ *     – PNG  : décodage maison (chunks IHDR/IDAT, inflate via
+ *       DecompressionStream('deflate') — le flux DEFLATE zlib d'un PNG est le
+ *       même format que celui attendu par le filtre PDF /FlateDecode),
+ *       dé-filtrage des scanlines (None/Sub/Up/Average/Paeth), aplatissement
+ *       de la transparence sur fond blanc, puis ré-encodage en RGB via
+ *       CompressionStream('deflate').
+ *   Seuls les PNG en 8 bits/canal, non entrelacés, sont supportés (largement
+ *   suffisant pour une photo d'identité) ; tout autre cas retombe silencieux-
+ *   ement sur le cadre vide d'origine (comportement pré-existant).
+ *
  * Utilisation :
- *   import { generateAdherentPdf } from '../_lib/pdf.js';
- *   const pdfBytes = await generateAdherentPdf(registration);   // Uint8Array
+ *   import { generateAdherentPdf, fetchPhotoDocument } from '../_lib/pdf.js';
+ *   const photo = await fetchPhotoDocument(env, registration.documents_json);
+ *   const pdfBytes = await generateAdherentPdf(registration, photo);   // Uint8Array
  */
 
 import { currentSeasonLabel } from './helpers.js';
+
+// ─── Récupération de la photo d'identité depuis R2 ───────────────────────────
+
+/**
+ * Va chercher la photo d'identité de l'adhérent dans le bucket R2 référencé
+ * par `documents_json` (colonne de `inscriptions_publiques`, écrite au moment
+ * de l'upload initial du dossier — cf. uploadRequiredFile() dans
+ * src/routes/api/public/inscription.js).
+ *
+ * @param {object} env             Bindings Worker (env.R2_STORAGE / env.R2_PDF)
+ * @param {string|object} documentsJson  Colonne documents_json (texte JSON ou déjà objet)
+ * @returns {Promise<{bytes: Uint8Array, contentType: string} | null>}
+ */
+export async function fetchPhotoDocument(env, documentsJson) {
+  try {
+    const docs = typeof documentsJson === 'string'
+      ? JSON.parse(documentsJson || '{}')
+      : (documentsJson || {});
+    const ref = docs.photoIdentity;
+    if (!ref?.bucket || !ref?.key) return null;
+    const bucket = ref.bucket === 'fullfighting-pdf' ? env.R2_PDF : env.R2_STORAGE;
+    if (!bucket) return null;
+    const object = await bucket.get(ref.key);
+    if (!object) return null;
+    const arrayBuffer = await object.arrayBuffer();
+    return {
+      bytes: new Uint8Array(arrayBuffer),
+      contentType: object.httpMetadata?.contentType || ref.contentType || '',
+    };
+  } catch (e) {
+    return null; // photo absente/illisible : le PDF retombe sur le cadre vide
+  }
+}
+
+// ─── Utilitaires bas niveau octets ────────────────────────────────────────────
+
+function strToBytes(str) {
+  const bytes = new Uint8Array(str.length);
+  for (let i = 0; i < str.length; i++) bytes[i] = str.charCodeAt(i) & 0xff;
+  return bytes;
+}
+
+function concatBytes(chunks) {
+  let total = 0;
+  for (const c of chunks) total += c.length;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) { out.set(c, offset); offset += c.length; }
+  return out;
+}
+
+async function inflateZlib(bytes) {
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function deflateZlib(bytes) {
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+// ─── Décodage JPEG (dimensions uniquement — octets réutilisés tels quels) ───
+
+function parseJpegInfo(bytes) {
+  if (bytes.length < 4 || bytes[0] !== 0xFF || bytes[1] !== 0xD8) return null;
+  let offset = 2;
+  while (offset < bytes.length - 1) {
+    if (bytes[offset] !== 0xFF) { offset++; continue; }
+    const marker = bytes[offset + 1];
+    // Marqueurs sans segment de longueur (bourrage, RSTn, SOI)
+    if (marker === 0xFF) { offset++; continue; }
+    if ((marker >= 0xD0 && marker <= 0xD9) || marker === 0x01) { offset += 2; continue; }
+    if (offset + 3 >= bytes.length) break;
+    const segLen = (bytes[offset + 2] << 8) | bytes[offset + 3];
+    const isSOF = marker >= 0xC0 && marker <= 0xCF && marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC;
+    if (isSOF) {
+      const p = offset + 4;
+      if (p + 5 >= bytes.length) return null;
+      const height = (bytes[p + 1] << 8) | bytes[p + 2];
+      const width  = (bytes[p + 3] << 8) | bytes[p + 4];
+      const numComponents = bytes[p + 5];
+      if (!width || !height) return null;
+      return { width, height, numComponents };
+    }
+    if (marker === 0xDA) break; // début du scan : plus la peine de chercher
+    offset += 2 + segLen;
+  }
+  return null;
+}
+
+// ─── Décodage PNG maison (8 bits/canal, non entrelacé) ───────────────────────
+
+function paethPredictor(a, b, c) {
+  const p = a + b - c;
+  const pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+  if (pa <= pb && pa <= pc) return a;
+  if (pb <= pc) return b;
+  return c;
+}
+
+function unfilterPngScanlines(raw, width, height, bpp) {
+  const stride = width * bpp;
+  const out = new Uint8Array(height * stride);
+  let rawOffset = 0;
+  for (let y = 0; y < height; y++) {
+    const filterType = raw[rawOffset++];
+    const rowStart = y * stride;
+    const prevRowStart = (y - 1) * stride;
+    for (let x = 0; x < stride; x++) {
+      const rawByte = raw[rawOffset++] || 0;
+      const a = x >= bpp ? out[rowStart + x - bpp] : 0;
+      const b = y > 0 ? out[prevRowStart + x] : 0;
+      const c = (y > 0 && x >= bpp) ? out[prevRowStart + x - bpp] : 0;
+      let val;
+      switch (filterType) {
+        case 0: val = rawByte; break;
+        case 1: val = rawByte + a; break;
+        case 2: val = rawByte + b; break;
+        case 3: val = rawByte + ((a + b) >> 1); break;
+        case 4: val = rawByte + paethPredictor(a, b, c); break;
+        default: val = rawByte;
+      }
+      out[rowStart + x] = val & 0xff;
+    }
+  }
+  return out;
+}
+
+function parsePngChunks(bytes) {
+  const chunks = [];
+  let offset = 8; // signature PNG (8 octets)
+  while (offset + 8 <= bytes.length) {
+    const length = ((bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]) >>> 0;
+    const type = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
+    const dataStart = offset + 8;
+    if (dataStart + length + 4 > bytes.length) break;
+    chunks.push({ type, data: bytes.slice(dataStart, dataStart + length) });
+    offset = dataStart + length + 4; // + CRC
+    if (type === 'IEND') break;
+  }
+  return chunks;
+}
+
+// Décode un PNG en pixels RGB 8 bits (alpha aplati sur fond blanc).
+// Retourne null si le PNG utilise une variante non supportée (palette,
+// 16 bits/canal, entrelacement Adam7...) — le PDF gardera alors le cadre vide.
+async function decodePngToRgb(bytes) {
+  const chunks = parsePngChunks(bytes);
+  const ihdr = chunks.find((c) => c.type === 'IHDR');
+  if (!ihdr || ihdr.data.length < 13) return null;
+  const d = ihdr.data;
+  const width  = ((d[0] << 24) | (d[1] << 16) | (d[2] << 8) | d[3]) >>> 0;
+  const height = ((d[4] << 24) | (d[5] << 16) | (d[6] << 8) | d[7]) >>> 0;
+  const bitDepth = d[8];
+  const colorType = d[9];
+  const interlace = d[12];
+  if (!width || !height || bitDepth !== 8 || interlace !== 0) return null;
+  if (![0, 2, 6].includes(colorType)) return null; // gris / RGB / RGBA uniquement
+
+  const idatChunks = chunks.filter((c) => c.type === 'IDAT').map((c) => c.data);
+  if (!idatChunks.length) return null;
+
+  let inflated;
+  try {
+    inflated = await inflateZlib(concatBytes(idatChunks));
+  } catch (e) {
+    return null;
+  }
+
+  const channels = colorType === 0 ? 1 : colorType === 2 ? 3 : 4;
+  const raw = unfilterPngScanlines(inflated, width, height, channels);
+
+  const rgb = new Uint8Array(width * height * 3);
+  const pixelCount = width * height;
+  for (let px = 0, i = 0; px < pixelCount; px++, i += channels) {
+    let r, g, b;
+    if (channels === 1) {
+      r = g = b = raw[i];
+    } else if (channels === 3) {
+      r = raw[i]; g = raw[i + 1]; b = raw[i + 2];
+    } else {
+      const alpha = raw[i + 3] / 255;
+      r = Math.round(raw[i]     * alpha + 255 * (1 - alpha));
+      g = Math.round(raw[i + 1] * alpha + 255 * (1 - alpha));
+      b = Math.round(raw[i + 2] * alpha + 255 * (1 - alpha));
+    }
+    const o = px * 3;
+    rgb[o] = r; rgb[o + 1] = g; rgb[o + 2] = b;
+  }
+  return { width, height, rgb };
+}
 
 // ─── Constantes page ──────────────────────────────────────────────────────────
 
@@ -99,10 +309,53 @@ class PdfBuilder {
         this.pageIndex  = 0;
         this.font       = null;
         this.fontSize   = 10;
+        this.images     = [];     // { id, bytes, filter, colorSpace, bpc, width, height }
     }
 
     // Page courante
     get ops() { return this.pages[this.pageIndex]; }
+
+    // ── Images intégrées (XObject) ──────────────────────────────────────────────
+    // bytes : octets prêts à embarquer tels quels (JPEG brut pour /DCTDecode,
+    // ou flux deflate pour /FlateDecode) — le décodage/ré-encodage se fait en
+    // amont (cf. decodePngToRgb / deflateZlib plus haut).
+    addImage(bytes, { filter, colorSpace = 'DeviceRGB', bpc = 8, width, height }) {
+        const id = `Im${this.images.length + 1}`;
+        this.images.push({ id, bytes, filter, colorSpace, bpc, width, height });
+        return { id, width, height };
+    }
+
+    // Dessine une image XObject dans un rectangle précis (mm, coin haut-gauche).
+    drawImage(imageId, xMm, yMm, wMm, hMm) {
+        const x = xMm * MM;
+        const y = H_PT - (yMm + hMm) * MM;
+        const w = wMm * MM;
+        const h = hMm * MM;
+        this.push(
+            'q',
+            `${+w.toFixed(2)} 0 0 ${+h.toFixed(2)} ${+x.toFixed(2)} ${+y.toFixed(2)} cm`,
+            `/${imageId} Do`,
+            'Q',
+        );
+    }
+
+    // Dessine une image en la faisant tenir dans une boîte (mm) SANS la
+    // déformer (letterbox centré) — évite d'étirer le portrait/paysage.
+    drawImageContain(imageId, boxXMm, boxYMm, boxWMm, boxHMm, imgWidthPx, imgHeightPx) {
+        const boxRatio = boxWMm / boxHMm;
+        const imgRatio = imgWidthPx / imgHeightPx;
+        let drawW, drawH;
+        if (imgRatio > boxRatio) {
+            drawW = boxWMm;
+            drawH = boxWMm / imgRatio;
+        } else {
+            drawH = boxHMm;
+            drawW = boxHMm * imgRatio;
+        }
+        const offX = boxXMm + (boxWMm - drawW) / 2;
+        const offY = boxYMm + (boxHMm - drawH) / 2;
+        this.drawImage(imageId, offX, offY, drawW, drawH);
+    }
 
     // ── Nouvelle page ───────────────────────────────────────────────────────────
     newPage() {
@@ -229,11 +482,40 @@ class PdfBuilder {
 
 // ─── Construction du PDF ──────────────────────────────────────────────────────
 
+// ─── Résolution de l'image photo (JPEG direct / PNG décodé) ──────────────────
+// Retourne { id, width, height } prêt pour drawImageContain(), ou null si la
+// photo est absente/illisible/dans un format non supporté — dans ce cas le
+// cadre "Photo d'identite" pré-existant reste affiché (comportement inchangé).
+async function resolvePhotoImage(p, photo) {
+    if (!photo?.bytes?.length) return null;
+    const bytes = photo.bytes;
+    try {
+        if (bytes[0] === 0xFF && bytes[1] === 0xD8) {
+            const info = parseJpegInfo(bytes);
+            if (!info) return null;
+            const colorSpace = info.numComponents === 1 ? 'DeviceGray' : 'DeviceRGB';
+            return p.addImage(bytes, { filter: 'DCTDecode', colorSpace, bpc: 8, width: info.width, height: info.height });
+        }
+        if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
+            const decoded = await decodePngToRgb(bytes);
+            if (!decoded) return null;
+            const flate = await deflateZlib(decoded.rgb);
+            return p.addImage(flate, { filter: 'FlateDecode', colorSpace: 'DeviceRGB', bpc: 8, width: decoded.width, height: decoded.height });
+        }
+    } catch (e) {
+        return null; // tout souci de décodage : on retombe sur le cadre vide
+    }
+    return null;
+}
+
 /**
  * @param {object} registration  Données du dossier (format dossier JSON de status.js)
- * @returns {Uint8Array}
+ * @param {{bytes: Uint8Array, contentType: string}|null} [photo]
+ *        Photo d'identité déjà récupérée via fetchPhotoDocument(). Optionnel :
+ *        si absente, le PDF affiche le cadre "Photo d'identite" comme avant.
+ * @returns {Promise<Uint8Array>}
  */
-export function generateAdherentPdf(registration) {
+export async function generateAdherentPdf(registration, photo = null) {
     const id    = registration.identity        || {};
     const ct    = registration.contact         || {};
     const em    = registration.emergency       || {};
@@ -257,6 +539,7 @@ export function generateAdherentPdf(registration) {
     const season       = safe(registration.seasonLabel) || currentSeasonLabel();
 
     const p = new PdfBuilder();
+    const photoImage = await resolvePhotoImage(p, photo);
 
     // ── Curseur vertical courant (mm depuis le haut de la page courante) ────────
     let y = 0;
@@ -407,8 +690,12 @@ export function generateAdherentPdf(registration) {
     p.setStrokeRgb(LINE);
     p.setLineWidth(0.2);
     p.roundedRect(ML/MM, y, 22, 26, 2, 'B');
-    p.text("Photo",      ML/MM + 11, y + 13,   { fontSize: 5, color: MUTED, align: 'center' });
-    p.text("d'identite", ML/MM + 11, y + 16.5, { fontSize: 5, color: MUTED, align: 'center' });
+    if (photoImage) {
+        p.drawImageContain(photoImage.id, ML/MM + 1, y + 1, 20, 24, photoImage.width, photoImage.height);
+    } else {
+        p.text("Photo",      ML/MM + 11, y + 13,   { fontSize: 5, color: MUTED, align: 'center' });
+        p.text("d'identite", ML/MM + 11, y + 16.5, { fontSize: 5, color: MUTED, align: 'center' });
+    }
 
     const fx2 = ML/MM + 25;
     const fw2 = (CW/MM - 27) / 2;
@@ -674,12 +961,12 @@ export function generateAdherentPdf(registration) {
         drawFooter(idx + 1, totalPageCount);
     });
 
-    return buildPdfDocument(p.getStreams());
+    return buildPdfDocument(p.getStreams(), p.images);
 }
 
 // ─── Assemblage bas niveau PDF 1.4 multi-pages ───────────────────────────────
 
-function buildPdfDocument(contentStreams) {
+function buildPdfDocument(contentStreams, images = []) {
     const pageCount = contentStreams.length;
 
     // Numéros d'objets :
@@ -687,68 +974,96 @@ function buildPdfDocument(contentStreams) {
     //  2 = Pages
     //  3..3+pageCount-1 = Page objects
     //  3+pageCount..   = Content streams
-    //  puis F1 (Helvetica) et F2 (Times-Italic)
+    //  puis F1 (Helvetica), F2 (Times-Italic)
+    //  puis un objet XObject /Image par photo embarquée (0 ou 1 aujourd'hui)
 
     const pageObjStart    = 3;
     const streamObjStart  = pageObjStart + pageCount;
     const font1ObjNum     = streamObjStart + pageCount;
     const font2ObjNum     = font1ObjNum + 1;
-    const totalObjCount   = font2ObjNum + 1;  // dernier numéro + 1
+    const imageObjStart   = font2ObjNum + 1;
+    const imageObjNums    = images.map((_, i) => imageObjStart + i);
+    const lastObjNum      = imageObjStart + images.length - 1; // dernier numéro d'objet utilisé
 
-    const objs = new Array(totalObjCount - 1); // index 0 = objet 1
+    // Chaque entrée = tableau de morceaux Uint8Array constituant l'objet PDF
+    // complet (texte + éventuel flux binaire). On travaille en octets plutôt
+    // qu'en concaténation de chaînes JS pour pouvoir embarquer des données
+    // binaires (JPEG/PNG) sans risquer de corrompre les octets > 127.
+    const objChunks = new Array(lastObjNum);
 
     // 1 — Catalog
-    objs[0] = `1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj`;
+    objChunks[0] = [strToBytes(`1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n`)];
 
     // 2 — Pages node
     const kidsRef = Array.from({ length: pageCount }, (_, i) => `${pageObjStart + i} 0 R`).join(' ');
-    objs[1] = `2 0 obj\n<< /Type /Pages /Kids [${kidsRef}] /Count ${pageCount} >>\nendobj`;
+    objChunks[1] = [strToBytes(`2 0 obj\n<< /Type /Pages /Kids [${kidsRef}] /Count ${pageCount} >>\nendobj\n`)];
+
+    // Ressource /XObject partagée par toutes les pages (inoffensive si non
+    // référencée sur une page qui ne dessine pas d'image).
+    const xobjectDict = images.length
+        ? ` /XObject << ${images.map((img, i) => `/${img.id} ${imageObjNums[i]} 0 R`).join(' ')} >>`
+        : '';
 
     // Page objects
     for (let i = 0; i < pageCount; i++) {
         const pageNum   = pageObjStart + i;
         const streamNum = streamObjStart + i;
-        objs[pageNum - 1] =
+        objChunks[pageNum - 1] = [strToBytes(
             `${pageNum} 0 obj\n` +
             `<< /Type /Page /Parent 2 0 R\n` +
             `/MediaBox [0 0 ${W_PT.toFixed(2)} ${H_PT.toFixed(2)}]\n` +
-            `/Resources << /Font << /F1 ${font1ObjNum} 0 R /F2 ${font2ObjNum} 0 R >> >>\n` +
-            `/Contents ${streamNum} 0 R >>\nendobj`;
+            `/Resources << /Font << /F1 ${font1ObjNum} 0 R /F2 ${font2ObjNum} 0 R >>${xobjectDict} >>\n` +
+            `/Contents ${streamNum} 0 R >>\nendobj\n`,
+        )];
     }
 
-    // Content streams
+    // Content streams (texte ASCII pur — cf. safe()/esc() partout ailleurs)
     for (let i = 0; i < pageCount; i++) {
         const streamNum = streamObjStart + i;
-        const stream = contentStreams[i];
-        objs[streamNum - 1] =
-            `${streamNum} 0 obj\n<< /Length ${stream.length} >>\nstream\n${stream}\nendstream\nendobj`;
+        const streamBytes = strToBytes(contentStreams[i]);
+        objChunks[streamNum - 1] = [
+            strToBytes(`${streamNum} 0 obj\n<< /Length ${streamBytes.length} >>\nstream\n`),
+            streamBytes,
+            strToBytes(`\nendstream\nendobj\n`),
+        ];
     }
 
     // Polices
-    objs[font1ObjNum - 1] =
-        `${font1ObjNum} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj`;
-    objs[font2ObjNum - 1] =
-        `${font2ObjNum} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Times-Italic >>\nendobj`;
+    objChunks[font1ObjNum - 1] = [strToBytes(`${font1ObjNum} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n`)];
+    objChunks[font2ObjNum - 1] = [strToBytes(`${font2ObjNum} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Times-Italic >>\nendobj\n`)];
 
-    // Assemblage final + xref
-    let pdf = '%PDF-1.4\n';
+    // Images (XObject binaires — JPEG brut /DCTDecode ou RGB deflate /FlateDecode)
+    images.forEach((img, i) => {
+        const objNum = imageObjNums[i];
+        const header = strToBytes(
+            `${objNum} 0 obj\n` +
+            `<< /Type /XObject /Subtype /Image /Width ${img.width} /Height ${img.height} ` +
+            `/ColorSpace /${img.colorSpace} /BitsPerComponent ${img.bpc} /Filter /${img.filter} ` +
+            `/Length ${img.bytes.length} >>\nstream\n`,
+        );
+        objChunks[objNum - 1] = [header, img.bytes, strToBytes(`\nendstream\nendobj\n`)];
+    });
+
+    // Assemblage final + xref (tout en octets pour rester correct avec le binaire)
+    const header = strToBytes('%PDF-1.4\n');
     const offsets = [];
-    for (const obj of objs) {
-        offsets.push(pdf.length);
-        pdf += obj + '\n';
+    const allChunks = [header];
+    let cursor = header.length;
+    for (const chunkList of objChunks) {
+        offsets.push(cursor);
+        for (const chunk of chunkList) {
+            allChunks.push(chunk);
+            cursor += chunk.length;
+        }
     }
-    const xrefOffset = pdf.length;
-    const n = totalObjCount;
-    pdf += `xref\n0 ${n}\n`;
-    pdf += '0000000000 65535 f \n';
+    const xrefOffset = cursor;
+    const n = lastObjNum + 1; // +1 pour l'entrée libre 0
+    let xrefStr = `xref\n0 ${n}\n0000000000 65535 f \n`;
     for (const off of offsets) {
-        pdf += `${String(off).padStart(10, '0')} 00000 n \n`;
+        xrefStr += `${String(off).padStart(10, '0')} 00000 n \n`;
     }
-    pdf += `trailer\n<< /Size ${n} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+    xrefStr += `trailer\n<< /Size ${n} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+    allChunks.push(strToBytes(xrefStr));
 
-    const bytes = new Uint8Array(pdf.length);
-    for (let i = 0; i < pdf.length; i++) {
-        bytes[i] = pdf.charCodeAt(i) & 0xff;
-    }
-    return bytes;
+    return concatBytes(allChunks);
 }

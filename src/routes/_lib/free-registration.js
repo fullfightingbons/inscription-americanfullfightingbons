@@ -22,7 +22,7 @@
  */
 
 import { isMinor, findActiveExercise, seasonLabelFromExercise } from "./helpers.js";
-import { generateAdherentPdf } from "./pdf.js";
+import { generateAdherentPdf, fetchPhotoDocument } from "./pdf.js";
 import {
   buildAdditionalOrderSyncItems,
   buildClothingSyncItems,
@@ -281,10 +281,15 @@ function buildRegistrationPdfPayload(registrationId, payload, totals, adherentId
   };
 }
 
-async function storeRegistrationPdf(env, registrationId, payload, totals, adherentId, exercise) {
+async function storeRegistrationPdf(env, db, registrationId, payload, totals, adherentId, exercise) {
   try {
     const pdfPayload = buildRegistrationPdfPayload(registrationId, payload, totals, adherentId, exercise);
-    const pdfBytes = generateAdherentPdf(pdfPayload);
+    const registrationRow = await db
+      .prepare(`SELECT documents_json FROM inscriptions_publiques WHERE id = ? LIMIT 1`)
+      .bind(registrationId)
+      .first();
+    const photo = await fetchPhotoDocument(env, registrationRow?.documents_json);
+    const pdfBytes = await generateAdherentPdf(pdfPayload, photo);
     const fileName = `inscription-affbc-${String(registrationId).slice(0, 8)}.pdf`;
     const r2Key = `adherents/${adherentId}/inscription-${String(registrationId).slice(0, 8)}.pdf`;
     const bucket = env.R2_PDF || env.R2_STORAGE;
@@ -384,7 +389,7 @@ export async function finalizeFreeRegistration(env, db, registrationId, payload,
     // l'inscription pour un souci de synchro stock annexe.
   }
 
-  const pdfFile = await storeRegistrationPdf(env, registrationId, payload, totals, adherentId, exercise);
+  const pdfFile = await storeRegistrationPdf(env, db, registrationId, payload, totals, adherentId, exercise);
   if (pdfFile) {
     const pdfUrl = `/api/storage/fullfighting-pdf/${pdfFile.key}`;
     await db
