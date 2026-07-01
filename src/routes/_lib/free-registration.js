@@ -175,7 +175,7 @@ async function nextFactureNumero(db, exercice_id) {
 // sert donc que dans le cas, en pratique très rare, où totals.total === 0 ET
 // qu'il existe malgré tout des lignes à 0 € à tracer dans `factures` — elle
 // est conservée pour cohérence mais ne créera de facture que si totalSales > 0.
-async function insertFreeSalesIfAny(db, registrationId, adherentId, nom, prenom, adresse, totals, exercise) {
+async function insertFreeSalesIfAny(db, registrationId, adherentId, nom, prenom, adresse, totals, clothingOrder, exercise) {
   const clothingTotal = Number(totals.clothingTotal || 0);
   const newMemberKitTotal = Number(totals.newMemberKit || 0);
   const passportTotal = Number(totals.passport || 0);
@@ -187,8 +187,8 @@ async function insertFreeSalesIfAny(db, registrationId, adherentId, nom, prenom,
   const id = crypto.randomUUID();
   const numero = await nextFactureNumero(db, exercise?.id);
   const lignes = [];
-  if (totals.tshirtQty > 0) lignes.push({ desc: `T-shirt club AFFBC (${totals.tshirtSize || "-"})`, qte: totals.tshirtQty, pu: totals.pricingTshirt || 25 });
-  if (totals.pantalonQty > 0) lignes.push({ desc: `Pantalon club AFFBC (${totals.pantalonSize || "-"})`, qte: totals.pantalonQty, pu: totals.pricingPantalon || 15 });
+  if (totals.tshirtQty > 0) lignes.push({ desc: `T-shirt club AFFBC (${clothingOrder?.tshirtSize || "-"})`, qte: totals.tshirtQty, pu: totals.pricingTshirt || 25 });
+  if (totals.pantalonQty > 0) lignes.push({ desc: `Pantalon club AFFBC (${clothingOrder?.pantalonSize || "-"})`, qte: totals.pantalonQty, pu: totals.pricingPantalon || 15 });
   if (passportTotal > 0) lignes.push({ desc: "Passeport sportif", qte: 1, pu: passportTotal });
   for (const item of totals.orderItems || []) {
     if (Number(item.quantity || 0) > 0) lignes.push({ desc: item.name, qte: item.quantity, pu: item.unitPrice });
@@ -378,6 +378,7 @@ export async function finalizeFreeRegistration(env, db, registrationId, payload,
     String(payload.identity?.firstName || "").trim(),
     adresse,
     totals,
+    payload.clothingOrder || {},
     exercise,
   );
 
