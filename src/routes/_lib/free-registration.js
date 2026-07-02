@@ -125,10 +125,6 @@ async function upsertFreeAdherent(db, payload, totals, exercise) {
     urgence_telephone: `${emergency.phonePrimary || ""} / ${emergency.phoneSecondary || ""}`.trim(),
     urgence_lien: minor ? String(legalRep.role || "").trim() : "Contact d'urgence",
     notes,
-    pdf_storage_path: null,
-    pdf_public_url: null,
-    pdf_nom_fichier: null,
-    pdf_uploaded_at: null,
     source_logiciel: "inscription-web",
     exercice_id: exercise?.id || null,
     created_at: existing?.created_at || now,
@@ -396,7 +392,7 @@ export async function finalizeFreeRegistration(env, db, registrationId, payload,
     await db
       .prepare(
         `UPDATE adherents
-        SET pdf_storage_path = ?, pdf_public_url = ?, pdf_nom_fichier = ?, pdf_uploaded_at = ?, updated_at = ?
+        SET pdf_inscription_storage_path = ?, pdf_inscription_public_url = ?, pdf_inscription_nom_fichier = ?, pdf_inscription_uploaded_at = ?, updated_at = ?
         WHERE id = ?`,
       )
       .bind(pdfFile.key, pdfUrl, pdfFile.fileName, new Date().toISOString(), new Date().toISOString(), adherentId)
