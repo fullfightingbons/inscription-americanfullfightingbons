@@ -1,5 +1,7 @@
 import { badRequest } from "./data.js";
 
+const FETCH_TIMEOUT_MS = 12_000; // 12 s pour les appels externes (aligné sur inscription.js)
+
 async function getRegistration(db, registrationId) {
   const row = await db.prepare(`SELECT * FROM inscriptions_publiques WHERE id = ? LIMIT 1`).bind(registrationId).first();
   if (!row?.id) {
@@ -63,6 +65,7 @@ async function getHelloAssoAccessToken(env) {
       client_id: env.HELLOASSO_CLIENT_ID,
       client_secret: env.HELLOASSO_CLIENT_SECRET,
     }),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   const result = await response.json().catch(() => null);
   if (!response.ok || !result?.access_token) {
@@ -84,6 +87,7 @@ async function helloAssoRequest(env, path, method = "GET", body = null) {
       ...(body ? { "content-type": "application/json" } : {}),
     },
     body: body ? JSON.stringify(body) : null,
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   const text = await response.text().catch(() => "");
   let result = null;
