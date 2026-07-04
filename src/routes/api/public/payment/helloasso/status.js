@@ -710,6 +710,7 @@ async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId,
       "content-type": "application/json",
       "api-key": env.BREVO_API_KEY,
     },
+    signal: AbortSignal.timeout(12_000),
     body: JSON.stringify({
       sender: {
         name: env.SIGNUP_ALERT_SENDER_NAME || "AFFBC Inscriptions",
