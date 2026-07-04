@@ -36,7 +36,7 @@ function getActiveExerciseDate(endDate) {
   }
   const now = new Date();
   const year = now.getMonth() >= 6 ? now.getFullYear() + 1 : now.getFullYear();
-  return `${year}-07-31`;
+  return `${year}-06-30`;
 }
 
 async function findMatchingAdherent(db, payload) {

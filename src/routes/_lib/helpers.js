@@ -37,14 +37,14 @@ export async function findActiveExercise(db) {
 
 /**
  * Calcule un libellé de saison "AAAA-AAAA" à partir d'une date (saison
- * sportive démarrant en septembre). Reproduit la même règle que
+ * sportive démarrant en juillet). Reproduit la même règle que
  * currentSeasonLabel()/seasonFromDate() côté logiciel de gestion, pour que
  * les deux logiciels affichent toujours la même saison.
  */
 export function currentSeasonLabel(ref = new Date()) {
   const year = ref.getFullYear();
   const month = ref.getMonth() + 1; // 1-12
-  const start = month >= 9 ? year : year - 1;
+  const start = month >= 7 ? year : year - 1;
   return `${start}-${start + 1}`;
 }
 
