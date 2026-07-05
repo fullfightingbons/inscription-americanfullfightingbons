@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "inscription-americanfullfightingbons",
-  "account_id": "a11cb0253f0870d57b54f6eaaedb439c",
+  "account_id": "<CLOUDFLARE_ACCOUNT_ID>",
   "main": "src/index.ts",
   "compatibility_date": "2025-12-17",
   "upload_source_maps": true,
@@ -37,7 +37,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_id": "678b90d9-5d87-4011-b077-af5a4d0358ee",
+      "database_id": "<AFFBC_PRODUCTION_DATABASE_ID>",
       "database_name": "affbc-production"
     }
   ],
