@@ -1,22 +1,6 @@
-// ─── Handlers des routes publiques d'inscription ──────────────────────────────
-// Ces modules ont été écrits avec la convention Cloudflare Pages Functions
-// (onRequestGet / onRequestPost prenant un objet { request, env }). Ce projet
-// est déployé comme un Worker classique (pas de routage par fichier), donc on
-// les branche explicitement ici plutôt que de compter sur un routage automatique.
-import { onRequestGet as inscriptionConfigHandler } from "./routes/api/public/inscription-config.js";
-import { onRequestGet as adherentEligibilityHandler } from "./routes/api/public/adherent-eligibility.js";
-import { onRequestPost as inscriptionSubmitHandler } from "./routes/api/public/inscription.js";
-import { onRequestGet as helloAssoStatusHandler } from "./routes/api/public/payment/helloasso/status.js";
-import { onRequestPost as helloAssoNotificationHandler } from "./routes/api/public/payment/helloasso/notification.js";
-import { onRequestGet as tarifsHandler } from "./routes/api/public/tarifs";
-// ─── Cron : purge des inscriptions abandonnées (fichiers R2 orphelins) ────────
-import { handleCleanupCron } from "./routes/cron/cleanup-abandoned.js";
-
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
-  R2_STORAGE: R2Bucket;
-  R2_PDF: R2Bucket;
   AFFBC_DB?: D1Database;
   SITE_NAME?: string;
   CONTACT_EMAIL?: string;
@@ -28,7 +12,6 @@ interface Env {
   SESSION_SECRET?: string;
   HELLOASSO_CLIENT_ID?: string;
   HELLOASSO_CLIENT_SECRET?: string;
-  HELLOASSO_ENV?: string;
   GOOGLE_PLACES_API_KEY?: string;
   SITE_PUBLIC_URL?: string;
   /** Set to "dev" in wrangler.json vars to disable the Secure cookie flag locally */
@@ -36,7 +19,6 @@ interface Env {
 }
 
 type Row = Record<string, unknown>;
-
 
 const SESSION_COOKIE = "affbc_site_session";
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -682,10 +664,6 @@ function resolvePublicBaseUrl(settings: Record<string, string>, env: Env, reques
   throw new Error("SITE_PUBLIC_URL manquant pour initialiser le checkout HelloAsso.");
 }
 
-function getHelloAssoBaseUrl(env: Env): string {
-  return env.HELLOASSO_ENV === "sandbox" ? "https://api.helloasso-sandbox.com" : "https://api.helloasso.com";
-}
-
 async function fetchHelloAssoAccessToken(env: Env): Promise<string> {
   const clientId = sanitizeText(env.HELLOASSO_CLIENT_ID, 200);
   const clientSecret = sanitizeText(env.HELLOASSO_CLIENT_SECRET, 240);
@@ -698,7 +676,7 @@ async function fetchHelloAssoAccessToken(env: Env): Promise<string> {
   body.set("client_id", clientId);
   body.set("client_secret", clientSecret);
 
-  const response = await fetch(`${getHelloAssoBaseUrl(env)}/oauth2/token`, {
+  const response = await fetch("https://api.helloasso.com/oauth2/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: body.toString(),
@@ -716,7 +694,7 @@ async function createHelloAssoCheckoutIntent(
   accessToken: string,
   values: Row
 ): Promise<Row> {
-  const response = await fetch(`${getHelloAssoBaseUrl(env)}/v5/organizations/${encodeURIComponent(organizationSlug)}/checkout-intents`, {
+  const response = await fetch(`https://api.helloasso.com/v5/organizations/${encodeURIComponent(organizationSlug)}/checkout-intents`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${accessToken}`,
@@ -742,7 +720,7 @@ async function getHelloAssoCheckoutIntent(
   checkoutIntentId: string
 ): Promise<Row> {
   const response = await fetch(
-    `${getHelloAssoBaseUrl(env)}/v5/organizations/${encodeURIComponent(organizationSlug)}/checkout-intents/${encodeURIComponent(
+    `https://api.helloasso.com/v5/organizations/${encodeURIComponent(organizationSlug)}/checkout-intents/${encodeURIComponent(
       checkoutIntentId
     )}`,
     {
@@ -1195,6 +1173,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   if (!user) return error("Identifiants invalides.", 401, request);
   if (!(await verifyPassword(password, user.password_hash))) return error("Identifiants invalides.", 401, request);
 
+  // Connexion réussie : réinitialiser le rate limiter
   await resetLoginRateLimit(loginIp, env);
 
   const token = await createSessionToken(
@@ -1289,6 +1268,7 @@ async function handleAdminSave(request: Request, env: Env): Promise<Response> {
   const table = String(payload.table || "") as keyof typeof EDITABLE_TABLES;
   const action = String(payload.action || "");
 
+  // Traitement mark-message en priorité (pas de table nécessaire)
   if (action === "mark-message") {
     const id = payload.id;
     const status = sanitizeText(payload.status, 30);
@@ -1357,6 +1337,8 @@ async function handleAdminSave(request: Request, env: Env): Promise<Response> {
   return error("Action non supportée.");
 }
 
+// ─── Login pour le Visual Builder (password seul → Bearer token) ─────────────
+
 async function handleAdminLogin(request: Request, env: Env): Promise<Response> {
   const loginIp = request.headers.get("cf-connecting-ip") ?? "unknown";
   if (!(await checkLoginRateLimit(loginIp, env))) {
@@ -1366,6 +1348,7 @@ async function handleAdminLogin(request: Request, env: Env): Promise<Response> {
   const password = String(payload.password || "");
   if (!password) return error("Mot de passe requis.");
 
+  // Cherche n'importe quel admin actif dont le mot de passe correspond
   const users = await readTable<Row>(
     env.DB,
     "SELECT * FROM admin_users WHERE active = 1"
@@ -1379,12 +1362,16 @@ async function handleAdminLogin(request: Request, env: Env): Promise<Response> {
   }
   if (!matched) return error("Mot de passe incorrect.", 401);
 
+  // Réutilise le même mécanisme HMAC que les sessions cookie,
+  // mais on le renvoie en tant que token Bearer (JSON).
   const token = await createSessionToken(
     { userId: String(matched.id), expiresAt: Date.now() + SESSION_TTL_MS },
     env
   );
   return ok({ token });
 }
+
+// ─── Vérification Bearer token (pour les routes /api/admin/*) ────────────────
 
 async function getUserFromBearer(request: Request, env: Env): Promise<Row | null> {
   const authHeader = request.headers.get("Authorization") || "";
@@ -1435,11 +1422,14 @@ async function routeApi(request: Request, env: Env, pathname: string): Promise<R
   if (pathname === "/api/auth/password" && request.method === "POST") {
     return handleChangePassword(request, env);
   }
+  // Visual Builder login (password seul, retourne un Bearer token)
   if (pathname === "/api/admin/login" && request.method === "POST") {
     return handleAdminLogin(request, env);
   }
 
+  // Routes admin : accepte aussi bien le cookie de session que le Bearer token
   if (pathname === "/api/admin/bootstrap" && request.method === "GET") {
+    // Tente d'abord le cookie, puis le Bearer token
     const cookieUser = await getCurrentUser(request, env);
     if (!cookieUser) {
       const bearerUser = await getUserFromBearer(request, env);
@@ -1449,23 +1439,6 @@ async function routeApi(request: Request, env: Env, pathname: string): Promise<R
   }
   if (pathname === "/api/admin/content" && request.method === "POST") {
     return handleAdminSave(request, env);
-  }
-
-  // ─── Routes publiques du formulaire d'inscription ───────────────────────────
-  if (pathname === "/api/public/adherent-eligibility" && request.method === "GET") {
-    return withHeaders(await adherentEligibilityHandler({ request, env }), request);
-  }
-  if ((pathname === "/api/public/inscription" || pathname === "/api/public/inscription/") && request.method === "POST") {
-    return withHeaders(await inscriptionSubmitHandler({ request, env }), request);
-  }
-  if (pathname === "/api/public/payment/helloasso/status" && request.method === "GET") {
-    return withHeaders(await helloAssoStatusHandler({ request, env }), request);
-  }
-  if (pathname === "/api/public/payment/helloasso/notification" && request.method === "POST") {
-    return withHeaders(await helloAssoNotificationHandler({ request, env }), request);
-  }
-  if (pathname === "/api/public/tarifs" && request.method === "GET") {
-    return withHeaders(await tarifsHandler({ request, env }), request);
   }
 
   return error("Not found", 404, request);
@@ -1489,44 +1462,51 @@ export {
   normalizeGoogleReview,
 };
 
+/**
+ * En-têtes de sécurité HTTP appliqués à toute réponse. Jusqu'ici ce Worker
+ * n'en envoyait aucun, contrairement à boutique/calendrier/inscription qui
+ * en ont déjà une partie — défense en profondeur, en complément de
+ * l'échappement HTML appliqué côté front (public/assets/site.js) et de
+ * safeHref() pour les liens éditables via le Visual Builder.
+ */
+const SECURITY_HEADERS: Record<string, string> = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  // 'unsafe-inline' nécessaire : public/assets/site.js et le Visual Builder
+  // n'utilisent pas de nonce CSP. Le CSP protège malgré tout contre le
+  // chargement de scripts/styles externes et restreint connect-src.
+  "Content-Security-Policy":
+    "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    "font-src 'self' https://fonts.gstatic.com; " +
+    "script-src 'self' 'unsafe-inline' https://pagead2.googlesyndication.com https://googleads.g.doubleclick.net https://www.googletagservices.com https://tpc.googlesyndication.com; " +
+    "connect-src 'self' https://pagead2.googlesyndication.com https://googleads.g.doubleclick.net https://www.google.com https://*.googlesyndication.com; " +
+    "frame-src 'self' https://www.google.com https://maps.google.com https://googleads.g.doubleclick.net https://tpc.googlesyndication.com https://www.googletagservices.com; " +
+    "frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+};
+
+function withSecurityHeaders(response: Response): Response {
+  const headers = new Headers(response.headers);
+  for (const [key, value] of Object.entries(SECURITY_HEADERS)) {
+    if (!headers.has(key)) headers.set(key, value);
+  }
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 export default {
-  // ─── Handler HTTP principal ─────────────────────────────────────────────────
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/inscription-config" && request.method === "GET") {
-      try {
-        return withHeaders(await inscriptionConfigHandler({ request, env }), request);
-      } catch (caught) {
-        const message = caught instanceof Error ? caught.message : "Erreur interne";
-        return error(message, 500, request);
-      }
-    }
+    let response: Response;
     if (url.pathname.startsWith("/api/")) {
       try {
-        return await routeApi(request, env, url.pathname);
+        response = await routeApi(request, env, url.pathname);
       } catch (caught) {
         const message = caught instanceof Error ? caught.message : "Erreur interne";
-        if (message === "Unauthorized") return error(message, 401, request);
-        return error(message, 500, request);
+        response = message === "Unauthorized" ? error(message, 401, request) : error(message, 500, request);
       }
+    } else {
+      response = await env.ASSETS.fetch(request);
     }
-    return withHeaders(await env.ASSETS.fetch(request), request);
-  },
-
-  // ─── Cron Trigger : purge quotidienne des inscriptions abandonnées ──────────
-  // Déclenché automatiquement selon le planning de wrangler.json (triggers.crons).
-  // Supprime les fichiers R2 (photo ID, certificat, justificatifs) des inscriptions
-  // restées en "paiement_en_attente" plus de 48 h sans paiement confirmé, puis
-  // passe leur statut à "abandonnee" et vide documents_json.
-  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
-    try {
-      const result = await handleCleanupCron(env);
-      console.log("[scheduled] cleanup-abandoned:", JSON.stringify(result));
-    } catch (err) {
-      console.error(
-        "[scheduled] cleanup-abandoned erreur:",
-        err instanceof Error ? err.message : String(err)
-      );
-    }
+    return withSecurityHeaders(response);
   },
 };
