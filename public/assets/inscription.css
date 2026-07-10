@@ -1,17 +1,17 @@
 :root{
-  --bg:#efe7dc;
-  --paper:#fcfaf6;
+  --bg:#f5efe4;
+  --paper:#fffdf9;
   --paper-strong:#fffdf9;
-  --ink:#20140f;
-  --muted:#6e5f55;
-  --line:#d8c8b8;
-  --red:#a23521;
-  --red-dark:#6f2117;
-  --gold:#c49a37;
-  --gold-soft:#efe3be;
+  --ink:#1a2430;
+  --muted:#607080;
+  --line:rgba(15,23,32,.14);
+  --red:#d84a2f;
+  --red-dark:#9f2413;
+  --gold:#d6ac54;
+  --gold-soft:#f1e4c6;
   --green:#1f6b47;
-  --navy:#24313f;
-  --shadow:0 24px 70px rgba(54,25,13,.12);
+  --navy:#07111d;
+  --shadow:0 24px 60px rgba(7,17,29,.12);
   --radius:24px;
   --radius-sm:16px;
 }
@@ -19,43 +19,61 @@
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
 body{
-  font-family:"Oswald","Segoe UI",sans-serif;
+  font-family:'Inter',sans-serif;
   color:var(--ink);
   background:
-    radial-gradient(circle at top right, rgba(196,154,55,.16), transparent 24%),
-    radial-gradient(circle at 10% 20%, rgba(36,49,63,.08), transparent 26%),
-    radial-gradient(circle at bottom left, rgba(162,53,33,.16), transparent 22%),
-    linear-gradient(180deg,#ebe0d1 0%, #f6f1e9 42%, #ece3d8 100%);
+    radial-gradient(circle at top right, rgba(214,172,84,.16), transparent 24%),
+    radial-gradient(circle at 10% 20%, rgba(7,17,29,.06), transparent 26%),
+    radial-gradient(circle at bottom left, rgba(216,74,47,.14), transparent 22%),
+    linear-gradient(180deg,#f0e9db 0%, #f7f2e8 42%, #eee5d5 100%);
   min-height:100vh;
 }
 a{color:inherit}
 
 .affbc-links{
-  max-width:1440px;
+  max-width:1180px;
   margin:0 auto;
-  padding:14px 28px 0;
+  padding:1rem 1.4rem 0;
   display:flex;
   align-items:center;
   justify-content:flex-end;
-  gap:8px;
-  flex-wrap:wrap;
+  gap:.4rem;
+}
+.affbc-links-inner{
+  display:flex;
+  align-items:center;
+  gap:1.5rem;
+  padding:.85rem 1.4rem;
+  border-radius:999px;
+  background:rgba(7,17,29,.92);
+  border:1px solid rgba(255,255,255,.08);
+  box-shadow:0 14px 42px rgba(7,17,29,.28);
+  backdrop-filter:blur(16px);
 }
 .affbc-links a{
-  border:1px solid rgba(110,95,85,.18);
-  border-radius:999px;
-  background:rgba(252,250,246,.82);
-  color:var(--muted);
-  padding:7px 12px;
-  font-size:12px;
-  font-weight:600;
+  position:relative;
+  color:rgba(255,255,255,.78);
+  padding:.2rem 0;
+  font-size:.86rem;
+  font-weight:500;
   text-decoration:none;
-  box-shadow:0 8px 22px rgba(54,25,13,.08);
+  transition:color .2s;
+}
+.affbc-links a::after{
+  content:"";
+  position:absolute;
+  left:0;bottom:-3px;width:100%;height:2px;
+  transform:scaleX(0);transform-origin:left;
+  background:linear-gradient(90deg,var(--gold),var(--red));
+  transition:transform .25s ease;
 }
 .affbc-links a:hover,
 .affbc-links a[aria-current="page"]{
   color:#fff;
-  border-color:var(--red);
-  background:linear-gradient(135deg,var(--red),var(--red-dark));
+}
+.affbc-links a:hover::after,
+.affbc-links a[aria-current="page"]::after{
+  transform:scaleX(1);
 }
 
 .signup-shell{max-width:1440px;margin:0 auto;padding:28px}
@@ -79,8 +97,8 @@ a{color:inherit}
   gap:24px;
   align-items:center;
   background:
-    linear-gradient(140deg, rgba(162,53,33,.98), rgba(111,33,23,.96)),
-    linear-gradient(180deg,#8e2f21,#641a12);
+    linear-gradient(140deg, rgba(216,74,47,.98), rgba(159,36,19,.96)),
+    linear-gradient(180deg,#c85a3d,#7a1d0f);
   color:#fff7ed;
   position:relative;
   overflow:hidden;
@@ -109,7 +127,7 @@ a{color:inherit}
   font-size:11px;
 }
 .hero-brand h1{
-  font-family:"Cormorant Garamond",serif;
+  font-family:'Sora',sans-serif;
   font-size:56px;
   line-height:.94;
   margin:10px 0 14px;
@@ -137,7 +155,7 @@ a{color:inherit}
   padding:28px;
 }
 .hero-card h2{
-  font-family:"Cormorant Garamond",serif;
+  font-family:'Sora',sans-serif;
   font-size:40px;
   line-height:1;
   margin:18px 0 12px;
@@ -205,7 +223,7 @@ a{color:inherit}
   padding:20px;
 }
 .sidebar-title{
-  font-family:"Cormorant Garamond",serif;
+  font-family:'Sora',sans-serif;
   font-size:28px;
   margin-bottom:14px;
 }
@@ -227,12 +245,12 @@ a{color:inherit}
   transition:border-color .2s ease, background .2s ease, color .2s ease, transform .2s ease;
 }
 .step-item:hover{
-  border-color:rgba(162,53,33,.28);
+  border-color:rgba(216,74,47,.28);
   transform:translateY(-1px);
 }
 .step-item.active{
-  border-color:rgba(162,53,33,.45);
-  background:linear-gradient(180deg, rgba(162,53,33,.12), rgba(162,53,33,.04));
+  border-color:rgba(216,74,47,.45);
+  background:linear-gradient(180deg, rgba(216,74,47,.12), rgba(216,74,47,.04));
   color:var(--ink);
 }
 .step-item.done{
@@ -350,7 +368,7 @@ a{color:inherit}
   align-items:center;
   padding:8px 12px;
   border-radius:999px;
-  background:rgba(36,49,63,.08);
+  background:rgba(7,17,29,.08);
   color:var(--navy);
   font-size:12px;
   letter-spacing:.04em;
@@ -359,14 +377,14 @@ a{color:inherit}
   margin-bottom:18px;
   border-radius:18px;
   padding:14px 16px;
-  border:1px solid rgba(162,53,33,.25);
-  background:rgba(162,53,33,.08);
+  border:1px solid rgba(216,74,47,.25);
+  background:rgba(216,74,47,.08);
   color:var(--red-dark);
   font-size:14px;
 }
 .alert-info{
-  border-color:rgba(36,49,63,.16);
-  background:rgba(36,49,63,.06);
+  border-color:rgba(7,17,29,.16);
+  background:rgba(7,17,29,.06);
   color:var(--navy);
 }
 .step-panel{display:none}
@@ -392,7 +410,7 @@ a{color:inherit}
 .closed-banner-card h2{
   margin:0 0 10px;
   color:var(--navy);
-  font-family:"Oswald","Segoe UI",sans-serif;
+  font-family:'Inter',sans-serif;
   letter-spacing:.02em;
 }
 .closed-banner-card p{
@@ -417,12 +435,12 @@ a{color:inherit}
   border-radius:18px;
   display:grid;
   place-items:center;
-  background:linear-gradient(180deg, rgba(196,154,55,.26), rgba(162,53,33,.15));
+  background:linear-gradient(180deg, rgba(214,172,84,.26), rgba(216,74,47,.15));
   color:var(--red-dark);
   font-size:24px;
 }
 .step-heading h2{
-  font-family:"Cormorant Garamond",serif;
+  font-family:'Sora',sans-serif;
   font-size:40px;
   line-height:1;
   margin:4px 0 0;
@@ -444,7 +462,7 @@ a{color:inherit}
 }
 .info-card h3,.rule-card h3,.payment-card h3{
   margin:0 0 10px;
-  font-family:"Cormorant Garamond",serif;
+  font-family:'Sora',sans-serif;
   font-size:30px;
 }
 .info-card p,.rule-card p,.success-panel p{margin:0;color:var(--muted);line-height:1.7;font-size:14px}
@@ -453,7 +471,7 @@ a{color:inherit}
   align-items:center;
   padding:7px 10px;
   border-radius:999px;
-  background:rgba(196,154,55,.14);
+  background:rgba(214,172,84,.14);
   color:#6b4c0c;
   font-size:11px;
   letter-spacing:.16em;
@@ -469,14 +487,14 @@ a{color:inherit}
 }
 .feature-panel h3,.policy-section h3{
   margin:0 0 14px;
-  font-family:"Cormorant Garamond",serif;
+  font-family:'Sora',sans-serif;
   font-size:36px;
   line-height:1;
 }
 .accent-panel{
   background:
-    linear-gradient(180deg, rgba(36,49,63,.98), rgba(24,35,48,.96)),
-    linear-gradient(180deg,#24313f,#182330);
+    linear-gradient(180deg, rgba(7,17,29,.98), rgba(12,28,46,.96)),
+    linear-gradient(180deg,#0c1c2e,#07111d);
   color:#f5efe7;
 }
 .accent-panel .section-mini{
@@ -527,7 +545,7 @@ a{color:inherit}
 .insurance-highlight{
   border-radius:20px;
   padding:18px 20px;
-  background:linear-gradient(135deg, rgba(162,53,33,.94), rgba(111,33,23,.96));
+  background:linear-gradient(135deg, rgba(216,74,47,.94), rgba(159,36,19,.96));
   color:#fff7ed;
 }
 .insurance-highlight strong,
@@ -549,13 +567,13 @@ a{color:inherit}
 .insurance-note,.image-rights-box{
   border-radius:18px;
   padding:16px 18px;
-  border:1px solid rgba(36,49,63,.14);
-  background:rgba(36,49,63,.05);
+  border:1px solid rgba(7,17,29,.14);
+  background:rgba(7,17,29,.05);
 }
 
 .section-title{
   margin:24px 0 12px;
-  font-family:"Cormorant Garamond",serif;
+  font-family:'Sora',sans-serif;
   font-size:30px;
 }
 .form-grid{
@@ -582,8 +600,8 @@ a{color:inherit}
 }
 .field input:focus,.field select:focus,.field textarea:focus{
   outline:none;
-  border-color:rgba(162,53,33,.45);
-  box-shadow:0 0 0 4px rgba(162,53,33,.08);
+  border-color:rgba(216,74,47,.45);
+  box-shadow:0 0 0 4px rgba(216,74,47,.08);
 }
 .field small{color:var(--muted);font-size:12px}
 .field-full{grid-column:1 / -1}
@@ -612,8 +630,8 @@ a{color:inherit}
 .health-box,.info-banner{
   border-radius:18px;
   padding:14px 16px;
-  border:1px solid rgba(196,154,55,.35);
-  background:rgba(196,154,55,.12);
+  border:1px solid rgba(214,172,84,.35);
+  background:rgba(214,172,84,.12);
   color:#6b4c0c;
   margin-bottom:18px;
   font-size:14px;
@@ -781,7 +799,7 @@ a{color:inherit}
   border:1px solid var(--line);
   transition:border-color .2s;
 }
-.size-guide[open]{border-color:rgba(162,53,33,.4)}
+.size-guide[open]{border-color:rgba(216,74,47,.4)}
 .size-guide summary{
   cursor:pointer;
   padding:8px 12px;
@@ -795,14 +813,14 @@ a{color:inherit}
   color:var(--red-dark);
   transition:background .15s;
 }
-.size-guide summary:hover{background:rgba(162,53,33,.05)}
+.size-guide summary:hover{background:rgba(216,74,47,.05)}
 .size-guide summary::-webkit-details-marker{display:none}
 .size-guide summary .sg-icon{font-size:13px;flex-shrink:0}
 .size-guide summary .sg-label{flex:1}
 .size-guide summary .sg-chevron{
   width:16px;height:16px;
   border-radius:50%;
-  background:rgba(162,53,33,.1);
+  background:rgba(216,74,47,.1);
   display:flex;align-items:center;justify-content:center;
   font-size:9px;
   color:var(--red-dark);
@@ -861,7 +879,7 @@ a{color:inherit}
   min-width:32px;
   padding:2px 7px;
   border-radius:20px;
-  background:rgba(162,53,33,.1);
+  background:rgba(216,74,47,.1);
   color:var(--red-dark);
   font-size:11.5px;
   font-weight:600;
@@ -914,7 +932,7 @@ a{color:inherit}
   padding:22px;
 }
 .payment-card.accent{
-  background:linear-gradient(180deg, rgba(162,53,33,.96), rgba(111,33,23,.96));
+  background:linear-gradient(180deg, rgba(216,74,47,.96), rgba(159,36,19,.96));
   color:#fff7ed;
 }
 .payment-card.accent .final-summary{color:rgba(255,247,237,.85)}
@@ -980,7 +998,7 @@ a{color:inherit}
   color:#fff;
 }
 .success-panel h2{
-  font-family:"Cormorant Garamond",serif;
+  font-family:'Sora',sans-serif;
   font-size:44px;
   margin:16px 0 10px;
 }
