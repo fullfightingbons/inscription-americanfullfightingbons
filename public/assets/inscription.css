@@ -1038,4 +1038,18 @@ a{color:inherit}
   .form-toolbar,.progress-head,.bank-actions{align-items:stretch}
   .form-toolbar > .btn{width:100%}
   .feature-panel h3,.policy-section h3{font-size:30px}
+  /* Nav des services AFFBC : passe en scroll horizontal plutôt que de déborder */
+  .affbc-links{justify-content:flex-start;padding:.85rem 1rem 0}
+  .affbc-links-inner{
+    max-width:100%;
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+    justify-content:flex-start;
+    gap:1.1rem;
+    padding:.75rem 1.1rem;
+  }
+  .affbc-links-inner::-webkit-scrollbar{display:none}
+  .affbc-links a{white-space:nowrap}
+  /* Empêche le zoom automatique d'iOS Safari au focus (nécessite >=16px) */
+  .field input,.field select,.field textarea{font-size:16px}
 }
