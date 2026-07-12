@@ -116,6 +116,28 @@ function clearDraft() {
   if (badge) badge.textContent = 'Brouillon non enregistré';
 }
 
+// ─── Préremplissage depuis l'espace membre ────────────────────────────────────
+// Le bouton "Renouveler mon adhésion" de l'espace membre encode les infos
+// déjà connues du membre dans ?prefill=<base64url(JSON)>. Réutilise le même
+// mécanisme que le brouillon (applyDraft) pour remplir le formulaire.
+function readPrefillFromUrl() {
+  try {
+    const params = new URLSearchParams(location.search);
+    const token = params.get('prefill');
+    if (!token) return null;
+    // Nettoyer l'URL tout de suite : évite de garder des infos
+    // personnelles dans l'historique du navigateur après le premier chargement.
+    history.replaceState({}, '', location.pathname);
+    const padded = token.replace(/-/g, '+').replace(/_/g, '/');
+    const binary = atob(padded + '='.repeat((4 - padded.length % 4) % 4));
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+    const json = new TextDecoder().decode(bytes);
+    return JSON.parse(json);
+  } catch (e) {
+    return null;
+  }
+}
+
 function applyDraft(data) {
   if (!data) return;
   const set = (id, v) => {
@@ -1343,14 +1365,26 @@ async function init() {
   renderQsGrid();
   renderClothingOrder();
 
-  // 4. Recharger le brouillon
-  const draft = loadDraft();
-  if (draft?.data) {
-    applyDraft(draft.data);
+  // 4. Préremplissage depuis l'espace membre (lien "Renouveler mon
+  // adhésion"), sinon recharger le brouillon local.
+  const prefill = readPrefillFromUrl();
+  let draft = null;
+  if (prefill) {
+    applyDraft(prefill);
     const alert = g('draft-alert');
     if (alert) {
       alert.hidden = false;
-      alert.textContent = 'Un brouillon a été restauré. Vérifiez vos informations avant de continuer.';
+      alert.textContent = 'Vos informations ont été préremplies depuis votre espace membre. Vérifiez-les avant de continuer.';
+    }
+  } else {
+    draft = loadDraft();
+    if (draft?.data) {
+      applyDraft(draft.data);
+      const alert = g('draft-alert');
+      if (alert) {
+        alert.hidden = false;
+        alert.textContent = 'Un brouillon a été restauré. Vérifiez vos informations avant de continuer.';
+      }
     }
   }
 
