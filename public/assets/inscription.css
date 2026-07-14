@@ -22,6 +22,7 @@ html,body{margin:0;padding:0}
 body{
   font-family:'Inter',sans-serif;
   color:var(--ink);
+  overflow-x:hidden;
   background:
     radial-gradient(circle at top right, rgba(214,172,84,.16), transparent 24%),
     radial-gradient(circle at 10% 20%, rgba(7,17,29,.06), transparent 26%),
@@ -1039,6 +1040,11 @@ a{color:inherit}
   .form-toolbar,.progress-head,.bank-actions{align-items:stretch}
   .form-toolbar > .btn{width:100%}
   .feature-panel h3,.policy-section h3{font-size:30px}
+  .hero-card h2{font-size:28px}
+  .section-title{font-size:24px}
+  .sidebar-title{font-size:22px}
+  .success-panel h2{font-size:32px}
+  .info-card h3,.rule-card h3,.payment-card h3{font-size:24px}
   /* Nav des services AFFBC : passe en scroll horizontal plutôt que de déborder */
   .affbc-links{justify-content:flex-start;padding:.85rem 1rem 0}
   .affbc-links-inner{
@@ -1053,4 +1059,8 @@ a{color:inherit}
   .affbc-links a{white-space:nowrap}
   /* Empêche le zoom automatique d'iOS Safari au focus (nécessite >=16px) */
   .field input,.field select,.field textarea{font-size:16px}
+}
+@media (max-width: 480px){
+  .qs-row{grid-template-columns:1fr}
+  .radio-set{margin-top:4px}
 }
