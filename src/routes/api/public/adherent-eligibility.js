@@ -12,6 +12,24 @@ function hasBureauDiscipline(discipline) {
   return String(discipline || "").toLowerCase().includes("membre du bureau");
 }
 
+// Voir le commentaire identique dans inscription.js : cette même fonction
+// existait en double ici, avec le même bug de comparaison stricte de
+// chaînes qui faisait échouer la vérification pour des dates pourtant
+// identiques mais stockées dans un format légèrement différent (import CSV
+// historique, saisie ancienne...).
+function normalizeDateForComparison(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
+  const fr = raw.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (fr) {
+    const year = fr[3].length === 2 ? `20${fr[3]}` : fr[3];
+    return `${year}-${fr[2].padStart(2, "0")}-${fr[1].padStart(2, "0")}`;
+  }
+  return raw;
+}
+
 export async function onRequestGet(context) {
   if (!context.env.DB) {
     return badRequest("D1 binding is missing", 500);
@@ -50,9 +68,9 @@ export async function onRequestGet(context) {
     }
 
     const adherent = await context.env.DB.prepare(
-      `SELECT nom, prenom, naissance, email, discipline FROM adherents WHERE nom = ? AND prenom = ?`,
+      `SELECT nom, prenom, naissance, email, discipline FROM adherents WHERE UPPER(TRIM(nom)) = ? AND UPPER(TRIM(prenom)) = ?`,
     )
-      .bind(lastName, firstName)
+      .bind(lastName, firstName.toUpperCase())
       .first();
 
     if (!adherent) {
@@ -67,7 +85,7 @@ export async function onRequestGet(context) {
       });
     }
 
-    if (adherent.naissance !== birthDate) {
+    if (normalizeDateForComparison(adherent.naissance) !== normalizeDateForComparison(birthDate)) {
       return json({
         data: {
           checked: true,
