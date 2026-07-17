@@ -18,6 +18,7 @@ import {
   assertAdditionalOrderItemsStock,
   assertClothingOrderStock,
   boutiqueStockRequestError,
+  fetchBoutiqueClothingPricing,
   fetchBoutiqueClothingStock,
   fetchBoutiqueProducts,
 } from "../../_lib/boutique-stock.js";
@@ -166,15 +167,16 @@ async function loadInscriptionStatus(db) {
 
 // ─── Chargement des tarifs depuis D1 (source de vérité) ──────────────────────
 
-async function loadPricingFromDb(db) {
+async function loadPricingFromDb(db, env) {
   const DEFAULT = { base: 250, family: 200, pro: 125, cseThales: 39, bureau: 0, newMemberKit: 40, passport: 25, tshirt: 25, pantalon: 15 };
+  let pricing;
   try {
     const result = await db.prepare(`SELECT cle, valeur FROM club_info`).all();
     const info   = Object.fromEntries((result.results || []).map((r) => [r.cle, r.valeur]));
     // Tenter aussi le champ JSON centralisé (tarifs.ts)
     let jsonPricing = {};
     try { jsonPricing = info.inscription_pricing ? JSON.parse(info.inscription_pricing) : {}; } catch {}
-    return {
+    pricing = {
       base:        Number(info.public_inscription_tarif_base        || jsonPricing.base        || DEFAULT.base),
       family:      Number(info.public_inscription_tarif_famille     || jsonPricing.family      || DEFAULT.family),
       pro:         Number(info.public_inscription_tarif_pro         || jsonPricing.pro         || DEFAULT.pro),
@@ -186,8 +188,31 @@ async function loadPricingFromDb(db) {
       pantalon:    Number(info.public_inscription_pantalon          || jsonPricing.pantalon    || DEFAULT.pantalon),
     };
   } catch {
-    return DEFAULT;
+    pricing = DEFAULT;
   }
+
+  // ── Prix t-shirt/pantalon : source de vérité = la boutique ───────────────
+  // Avant ce correctif, ces deux prix vivaient uniquement dans club_info,
+  // totalement indépendants du prix réellement affiché/facturé sur la
+  // boutique pour le même article physique — rien n'empêchait les deux de
+  // diverger silencieusement après un changement de prix fait d'un seul
+  // côté. On tente maintenant de récupérer le prix réel depuis la boutique
+  // à chaque calcul ; en cas d'échec (boutique indisponible, article pas
+  // trouvé par nom), on retombe sans bruit sur la valeur club_info
+  // ci-dessus, qui reste donc un filet de sécurité, jamais supprimée.
+  try {
+    const boutiquePricing = await fetchBoutiqueClothingPricing(env);
+    if (boutiquePricing.tshirt && boutiquePricing.tshirt.price > 0) {
+      pricing.tshirt = boutiquePricing.tshirt.price;
+    }
+    if (boutiquePricing.pantalon && boutiquePricing.pantalon.price > 0) {
+      pricing.pantalon = boutiquePricing.pantalon.price;
+    }
+  } catch (err) {
+    console.warn('[pricing] Prix boutique indisponible, repli sur club_info :', err?.message || err);
+  }
+
+  return pricing;
 }
 
 async function loadOrderProductsFromDb(db, env) {
@@ -661,7 +686,7 @@ export async function onRequestPost(context) {
     }
 
     // ── Calcul des totaux depuis D1 (jamais depuis payload.pricing) ──────────
-    const serverPricing = await loadPricingFromDb(context.env.DB);
+    const serverPricing = await loadPricingFromDb(context.env.DB, context.env);
     const extraProductCatalog = await loadOrderProductsFromDb(context.env.DB, context.env);
     const totals = calculateTotals(
       { ...payload.practice, passRegionAmount: payload.practice?.passRegionAmount },

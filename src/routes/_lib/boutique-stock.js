@@ -33,6 +33,7 @@ function normalizeBoutiqueProduct(product) {
     kind,
     productId: Number(product.id),
     name: String(product.name || ""),
+    price: Math.max(0, Number(product.price) || 0),
     stock: Math.max(0, Number(product.stock) || 0),
     sizes: sizes.filter(Boolean),
     stockBySize,
@@ -78,6 +79,36 @@ async function fetchBoutiqueClothingStock(env) {
   const payload = await response.json().catch(() => null);
   if (!response.ok || !Array.isArray(payload)) {
     throw new Error("Stock boutique indisponible");
+  }
+  const byKind = {};
+  for (const rawProduct of payload) {
+    const normalized = normalizeBoutiqueProduct(rawProduct);
+    if (normalized) byKind[normalized.kind] = normalized;
+  }
+  return {
+    tshirt: byKind.tshirt || null,
+    pantalon: byKind.pantalon || null,
+  };
+}
+
+// Source de vérité unique pour le prix du t-shirt/pantalon (cf. incohérence
+// repérée : avant ceci, inscription avait son propre prix indépendant dans
+// club_info, qui pouvait diverger silencieusement du prix réel pratiqué sur
+// la boutique). Contrairement à fetchBoutiqueClothingStock ci-dessus (qui
+// sert à vérifier la disponibilité au moment de la commande, donc filtre
+// volontairement stock > 0), on veut ici retrouver le prix même si
+// l'article est temporairement en rupture — d'où `all=1`. Détection de
+// l'article par nom (cf. detectClothingKind), donc à garder en tête : le nom
+// du produit boutique doit continuer à contenir "t-shirt"/"tshirt" ou
+// "pantalon" pour que la détection fonctionne (renommer le produit chaque
+// saison, ex. "T-shirt Club 2027", ne casse rien tant que ce mot-clé reste).
+async function fetchBoutiqueClothingPricing(env) {
+  const response = await fetch(`${getBoutiqueApiBase(env)}/api/products?category=tenues&all=1`, {
+    headers: { Accept: "application/json" },
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || !Array.isArray(payload)) {
+    throw new Error("Catalogue boutique indisponible");
   }
   const byKind = {};
   for (const rawProduct of payload) {
@@ -212,6 +243,7 @@ export {
   buildClothingSyncItems,
   boutiqueStockRequestError,
   clothingStockResponse,
+  fetchBoutiqueClothingPricing,
   fetchBoutiqueClothingStock,
   fetchBoutiqueProducts,
   getAvailableSizeStock,
