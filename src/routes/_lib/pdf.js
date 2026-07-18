@@ -250,17 +250,23 @@ const CONTENT_MAX = PAGE_H_MM - FOOTER_H_MM - 3; // ~279 mm — limite avant foo
 
 // ─── Palette (RGB 0–255) ──────────────────────────────────────────────────────
 
-const RED  = [162, 53, 33];
-const DARK = [111, 33, 23];
-const GOLD = [196, 154, 55];
+// Charte recolorée le 18/07/2026 pour s'harmoniser avec les autres documents
+// du club (factures, reçus, attestations — cf. document-template.js) : noir
+// + doré partout, au lieu du rouge/marine d'origine. Les noms de constantes
+// (RED, DARK, NAVY...) sont conservés tels quels pour ne pas devoir toucher
+// aux ~20 points d'usage plus bas dans ce fichier — seules les valeurs
+// changent.
+const RED  = [17, 17, 17];      // ex-rouge #A23521 -> noir #111111
+const DARK = [34, 34, 34];      // ex-brun foncé #6F2117 -> gris très foncé #222222
+const GOLD = [212, 172, 13];    // aligné sur DORE_CLAIR des autres documents (#D4AC0D)
 const INK  = [32, 20, 15];
 const MUTED= [110, 95, 85];
 const LINE = [216, 200, 184];
 const WHITE= [255, 255, 255];
 const GREEN= [31, 107, 71];
-const NAVY = [36, 49, 63];
+const NAVY = [17, 17, 17];      // ex-marine #24313F -> noir #111111 (unifié avec RED)
 const CREAM= [252, 250, 246];
-const GOLD_BG  = [239, 227, 190];
+const GOLD_BG  = [250, 243, 220];  // aligné sur DORE_BG des autres documents
 const WARN_BG  = [253, 236, 234];
 const OK_BG    = [230, 243, 237];
 const BEIGE_BG = [241, 236, 228];
