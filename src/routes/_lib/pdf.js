@@ -287,7 +287,11 @@ function safe(v) {
     .replace(/[\u2018\u2019\u02BC]/g, "'")
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^\x20-\x7E]/g, ' ')
+    // \u00B0 (°) est conservé : même code point en Latin-1/WinAnsi, donc un
+    // octet unique — strToBytes ci-dessus l'encode déjà correctement (cf.
+    // bug "N " au lieu de "N°" corrigé dans boutique/gestion, qui utilisaient
+    // TextEncoder/UTF-8 et devaient donc stripper ce caractère).
+    .replace(/[^\x20-\x7E\u00B0]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
