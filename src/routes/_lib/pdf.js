@@ -1039,8 +1039,8 @@ function buildPdfDocument(contentStreams, images = []) {
     }
 
     // Polices
-    objChunks[font1ObjNum - 1] = [strToBytes(`${font1ObjNum} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n`)];
-    objChunks[font2ObjNum - 1] = [strToBytes(`${font2ObjNum} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Times-Italic >>\nendobj\n`)];
+    objChunks[font1ObjNum - 1] = [strToBytes(`${font1ObjNum} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n`)];
+    objChunks[font2ObjNum - 1] = [strToBytes(`${font2ObjNum} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Times-Italic /Encoding /WinAnsiEncoding >>\nendobj\n`)];
 
     // Images (XObject binaires — JPEG brut /DCTDecode ou RGB deflate /FlateDecode)
     images.forEach((img, i) => {
