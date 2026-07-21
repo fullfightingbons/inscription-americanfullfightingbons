@@ -648,7 +648,14 @@ export async function generateAdherentPdf(registration, photo = null) {
         p.roundedRect(xMm, yMm, wMm, 7.5, 1.5, 'B');
         p.text(label.toUpperCase(), xMm + 2, yMm + 3,   { fontSize: 4.8, color: MUTED });
         const val = safe(value);
-        p.text(val || '-',          xMm + 2, yMm + 6.2, { fontSize: 7,   color: val ? INK : MUTED });
+        // Valeurs saisies par l'utilisateur (nom compose, intitule de
+        // formule...) sans longueur garantie : on reduit legerement la
+        // police si besoin plutot que de laisser deborder du cadre, comme
+        // pour le numero de facture (meme categorie de bug).
+        let fs = 7;
+        const maxPt = (wMm - 4) * MM;
+        while (fs > 5 && val && measureTextWidth(val, 'F1', fs) > maxPt) fs -= 0.5;
+        p.text(val || '-',          xMm + 2, yMm + 6.2, { fontSize: fs,   color: val ? INK : MUTED });
     }
 
     function qsRow(question, answer) {
