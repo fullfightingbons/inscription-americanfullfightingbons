@@ -729,9 +729,27 @@ export async function generateAdherentPdf(registration, photo = null) {
         [`${total.toFixed(2)} EUR total`, `HelloAsso ${installments}x`],
     ];
     const colW = 210 / summaryItems.length;
+    // Les 4 cellules ne font que 52.5mm de large : un intitule de formule
+    // libre (saisi cote admin) peut largement depasser cette largeur a
+    // 7pt et chevaucher les colonnes voisines. On reduit la police, et en
+    // dernier recours on tronque avec des points de suspension.
+    function fitCell(val, maxWMm, baseFs, minFs) {
+        let fs = baseFs;
+        while (fs > minFs && measureTextWidth(val, 'F1', fs) > maxWMm * MM) fs -= 0.5;
+        if (measureTextWidth(val, 'F1', fs) > maxWMm * MM) {
+            let truncated = val;
+            while (truncated.length > 1 && measureTextWidth(truncated + '…', 'F1', fs) > maxWMm * MM) {
+                truncated = truncated.slice(0, -1);
+            }
+            val = truncated + '…';
+        }
+        return { val, fs };
+    }
     summaryItems.forEach(([val, lbl], i) => {
         const cx = i * colW + colW / 2;
-        p.text(val, cx, y + 4,   { fontSize: 7,   color: [61, 40, 0],     align: 'center' });
+        const cellMaxW = colW - 4;
+        const fitted = fitCell(val, cellMaxW, 7, 5);
+        p.text(fitted.val, cx, y + 4,   { fontSize: fitted.fs, color: [61, 40, 0],     align: 'center' });
         p.text(lbl, cx, y + 6.8, { fontSize: 5.2, color: [138, 105, 32],  align: 'center' });
         if (i < summaryItems.length - 1) {
             p.setStrokeRgb(GOLD);
