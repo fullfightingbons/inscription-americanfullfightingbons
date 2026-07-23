@@ -253,8 +253,8 @@ async function nextFactureNumero(db, exercice_id) {
 async function insertInscriptionSales(db, registrationId, adherentId, nom, prenom, adresse, totals, exercise) {
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
-  const numero = await nextFactureNumero(db, exercise?.id);
-
+  const numero = await nextFactureNumero(db, exercise?.id ?? null);
+  
   const lignes = [];
   if (Number(totals.newMemberKit || 0) > 0) {
     lignes.push({
