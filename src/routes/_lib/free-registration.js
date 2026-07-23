@@ -181,7 +181,7 @@ async function insertFreeSalesIfAny(db, registrationId, adherentId, nom, prenom,
 
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
-  const numero = await nextFactureNumero(db, exercise?.id);
+  const numero = await nextFactureNumero(db, exercise?.id ?? null);
   const lignes = [];
   if (totals.tshirtQty > 0) lignes.push({ desc: `T-shirt club AFFBC (${clothingOrder?.tshirtSize || "-"})`, qte: totals.tshirtQty, pu: totals.pricingTshirt || 25 });
   if (totals.pantalonQty > 0) lignes.push({ desc: `Pantalon club AFFBC (${clothingOrder?.pantalonSize || "-"})`, qte: totals.pantalonQty, pu: totals.pricingPantalon || 15 });
