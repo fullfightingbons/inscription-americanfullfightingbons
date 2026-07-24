@@ -12,6 +12,23 @@ function hasBureauDiscipline(discipline) {
   return String(discipline || "").toLowerCase().includes("membre du bureau");
 }
 
+// Voir le commentaire identique dans inscription.js : le nom/prénom stocké
+// peut contenir des accents (Héloïse, Danaï...). SQLite ne fournit pas
+// d'ICU par défaut : UPPER() ne normalise QUE les lettres ASCII et laisse
+// les caractères accentués tels quels. Comparer `UPPER(TRIM(nom)) = ?` en
+// SQL faisait donc échouer silencieusement la vérification pour toute
+// personne dont le nom contient un accent, dès que celui-ci est retapé
+// légèrement différemment (oublié, ou encodé dans une autre forme Unicode
+// de composition). On normalise donc en supprimant les diacritiques avant
+// de comparer.
+function normalizeNameForComparison(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toUpperCase();
+}
+
 // Voir le commentaire identique dans inscription.js : cette même fonction
 // existait en double ici, avec le même bug de comparaison stricte de
 // chaînes qui faisait échouer la vérification pour des dates pourtant
@@ -38,8 +55,8 @@ export async function onRequestGet(context) {
   try {
     const url = new URL(context.request.url);
     const typeInscription = normalizePersonName(url.searchParams.get("typeInscription"));
-    const lastName = normalizePersonName(url.searchParams.get("lastName")).toUpperCase();
-    const firstName = normalizePersonName(url.searchParams.get("firstName"));
+    const lastName = normalizeNameForComparison(url.searchParams.get("lastName"));
+    const firstName = normalizeNameForComparison(url.searchParams.get("firstName"));
     const birthDate = normalizePersonName(url.searchParams.get("birthDate"));
     const email = normalizeEmail(url.searchParams.get("email"));
 
@@ -67,11 +84,12 @@ export async function onRequestGet(context) {
       });
     }
 
-    const adherent = await context.env.DB.prepare(
-      `SELECT nom, prenom, naissance, email, discipline FROM adherents WHERE UPPER(TRIM(nom)) = ? AND UPPER(TRIM(prenom)) = ?`,
-    )
-      .bind(lastName, firstName.toUpperCase())
-      .first();
+    const { results } = await context.env.DB
+      .prepare(`SELECT nom, prenom, naissance, email, discipline FROM adherents`)
+      .all();
+    const adherent = (results || []).find(
+      (a) => normalizeNameForComparison(a.nom) === lastName && normalizeNameForComparison(a.prenom) === firstName,
+    ) || null;
 
     if (!adherent) {
       return json({

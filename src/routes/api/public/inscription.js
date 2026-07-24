@@ -612,6 +612,23 @@ function normalizePersonName(value) { return String(value || "").trim(); }
 function normalizeEmail(value)      { return String(value || "").trim().toLowerCase(); }
 function hasBureauDiscipline(discipline) { return String(discipline || "").toLowerCase().includes("membre du bureau"); }
 
+// Le nom/prénom stocké peut contenir des accents (Héloïse, Danaï...). SQLite
+// ne fournit pas d'ICU par défaut : UPPER() ne normalise QUE les lettres
+// ASCII et laisse les caractères accentués tels quels. Comparer
+// `UPPER(TRIM(nom)) = ?` en SQL faisait donc échouer silencieusement le
+// renouvellement de toute personne dont le nom contient un accent, dès que
+// celui-ci est retapé légèrement différemment (oublié, ou encodé dans une
+// autre forme Unicode de composition — courant selon le clavier/appareil).
+// On normalise donc en supprimant les diacritiques avant de comparer,
+// exactement comme pour les dates ci-dessous.
+function normalizeNameForComparison(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toUpperCase();
+}
+
 // La date envoyée par le formulaire public est toujours au format ISO strict
 // YYYY-MM-DD (imposé par requireDate + <input type="date">). En revanche, la
 // date stockée pour un adhérent existant (adherent.naissance) peut provenir
@@ -635,16 +652,22 @@ function normalizeDateForComparison(value) {
 }
 
 async function findMatchingAdherent(db, payload) {
-  const nom      = String(payload.identity?.lastName  || "").trim().toUpperCase();
-  const prenom   = normalizePersonName(payload.identity?.firstName);
+  const nom      = normalizeNameForComparison(payload.identity?.lastName);
+  const prenom   = normalizeNameForComparison(payload.identity?.firstName);
   const birthDate = String(payload.identity?.birthDate || "").trim();
   const email    = normalizeEmail(payload.contact?.email);
   if (!nom || !prenom || !birthDate || !email) return { adherent: null, renewalVerified: false, reason: "missing_fields" };
 
-  const adherent = await db
-    .prepare(`SELECT id, nom, prenom, naissance, email, discipline FROM adherents WHERE UPPER(TRIM(nom)) = ? AND UPPER(TRIM(prenom)) = ?`)
-    .bind(nom, prenom.toUpperCase())
-    .first();
+  // Comparaison faite en JS (et non plus dans le SQL) pour pouvoir ignorer
+  // les accents des deux côtés — le nombre d'adhérents d'un club reste
+  // largement raisonnable pour filtrer côté application sans souci de
+  // performance.
+  const { results } = await db
+    .prepare(`SELECT id, nom, prenom, naissance, email, discipline FROM adherents`)
+    .all();
+  const adherent = (results || []).find(
+    (a) => normalizeNameForComparison(a.nom) === nom && normalizeNameForComparison(a.prenom) === prenom
+  ) || null;
   if (!adherent)                                                                              return { adherent: null,  renewalVerified: false, reason: "not_found" };
   if (normalizeDateForComparison(adherent.naissance) !== normalizeDateForComparison(birthDate)) return { adherent,        renewalVerified: false, reason: "birthdate_mismatch" };
   if (normalizeEmail(adherent.email) !== email)                                                 return { adherent,        renewalVerified: false, reason: "email_mismatch" };
