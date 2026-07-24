@@ -1,142 +1,33 @@
-import { badRequest, json } from "../../_lib/data.js";
-
-function normalizePersonName(value) {
-  return String(value || "").trim();
-}
-
-function normalizeEmail(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function hasBureauDiscipline(discipline) {
-  return String(discipline || "").toLowerCase().includes("membre du bureau");
-}
-
-// Voir le commentaire identique dans inscription.js : le nom/prénom stocké
-// peut contenir des accents (Héloïse, Danaï...). SQLite ne fournit pas
-// d'ICU par défaut : UPPER() ne normalise QUE les lettres ASCII et laisse
-// les caractères accentués tels quels. Comparer `UPPER(TRIM(nom)) = ?` en
-// SQL faisait donc échouer silencieusement la vérification pour toute
-// personne dont le nom contient un accent, dès que celui-ci est retapé
-// légèrement différemment (oublié, ou encodé dans une autre forme Unicode
-// de composition). On normalise donc en supprimant les diacritiques avant
-// de comparer.
-function normalizeNameForComparison(value) {
-  return String(value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .toUpperCase();
-}
-
-// Voir le commentaire identique dans inscription.js : cette même fonction
-// existait en double ici, avec le même bug de comparaison stricte de
-// chaînes qui faisait échouer la vérification pour des dates pourtant
-// identiques mais stockées dans un format légèrement différent (import CSV
-// historique, saisie ancienne...).
-function normalizeDateForComparison(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (iso) return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
-  const fr = raw.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
-  if (fr) {
-    const year = fr[3].length === 2 ? `20${fr[3]}` : fr[3];
-    return `${year}-${fr[2].padStart(2, "0")}-${fr[1].padStart(2, "0")}`;
-  }
-  return raw;
-}
-
-export async function onRequestGet(context) {
-  if (!context.env.DB) {
-    return badRequest("D1 binding is missing", 500);
-  }
-
-  try {
-    const url = new URL(context.request.url);
-    const typeInscription = normalizePersonName(url.searchParams.get("typeInscription"));
-    const lastName = normalizeNameForComparison(url.searchParams.get("lastName"));
-    const firstName = normalizeNameForComparison(url.searchParams.get("firstName"));
-    const birthDate = normalizePersonName(url.searchParams.get("birthDate"));
-    const email = normalizeEmail(url.searchParams.get("email"));
-
-    if (typeInscription !== "renouvellement") {
-      return json({
-        data: {
-          checked: true,
-          renewalVerified: false,
-          eligibleForBureauRate: false,
-          reason: "not_renewal",
-        },
-        error: null,
-      });
-    }
-
-    if (!lastName || !firstName || !birthDate || !email) {
-      return json({
-        data: {
-          checked: false,
-          renewalVerified: false,
-          eligibleForBureauRate: false,
-          reason: "missing_fields",
-        },
-        error: null,
-      });
-    }
-
-    const { results } = await context.env.DB
-      .prepare(`SELECT nom, prenom, naissance, email, discipline FROM adherents`)
-      .all();
-    const adherent = (results || []).find(
-      (a) => normalizeNameForComparison(a.nom) === lastName && normalizeNameForComparison(a.prenom) === firstName,
-    ) || null;
-
-    if (!adherent) {
-      return json({
-        data: {
-          checked: true,
-          renewalVerified: false,
-          eligibleForBureauRate: false,
-          reason: "not_found",
-        },
-        error: null,
-      });
-    }
-
-    if (normalizeDateForComparison(adherent.naissance) !== normalizeDateForComparison(birthDate)) {
-      return json({
-        data: {
-          checked: true,
-          renewalVerified: false,
-          eligibleForBureauRate: false,
-          reason: "birthdate_mismatch",
-        },
-        error: null,
-      });
-    }
-
-    if (normalizeEmail(adherent.email) !== email) {
-      return json({
-        data: {
-          checked: true,
-          renewalVerified: false,
-          eligibleForBureauRate: false,
-          reason: "email_mismatch",
-        },
-        error: null,
-      });
-    }
-
-    return json({
-      data: {
-        checked: true,
-        renewalVerified: true,
-        eligibleForBureauRate: hasBureauDiscipline(adherent.discipline),
-        reason: hasBureauDiscipline(adherent.discipline) ? "eligible" : "discipline_missing",
-      },
-      error: null,
-    });
-  } catch (error) {
-    return badRequest(error.message, 500);
-  }
+{
+	"name": "inscription-americanfullfightingbons",
+	"description": "Site public d'inscription AFFBC déployé sur Cloudflare Workers.",
+	"cloudflare": {
+		"label": "Worker + D1 Database",
+		"products": [
+			"Workers",
+			"D1"
+		],
+		"categories": [
+			"storage"
+		],
+		"docs_url": "https://developers.cloudflare.com/d1/",
+		"preview_icon_url": "https://imagedelivery.net/wSMYJvS3Xw-n339CbDyDIA/6c63cca8-354a-4951-45a0-d58769ac6f00/public",
+		"preview_image_url": "https://imagedelivery.net/wSMYJvS3Xw-n339CbDyDIA/aa6158f1-7711-4485-f134-a8c802c0a800/preview",
+		"publish": true
+	},
+	"devDependencies": {
+		"typescript": "5.9.3",
+		"wrangler": "4.97.0"
+	},
+	"private": true,
+	"scripts": {
+		"cf-typegen": "wrangler types",
+		"typecheck": "tsc --noEmit",
+		"check": "tsc --noEmit && wrangler deploy --dry-run",
+		"deploy": "wrangler deploy",
+		"dev": "npm run seedLocalD1 && wrangler dev",
+		"predeploy": "wrangler d1 migrations apply DB --remote",
+		"seedLocalD1": "wrangler d1 migrations apply DB --local",
+		"test": "node --test tests/*.test.mjs"
+	}
 }
