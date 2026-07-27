@@ -10,6 +10,13 @@ function normalizeSize(value) {
   return String(value || "").trim().toUpperCase();
 }
 
+// Doit correspondre (une fois normalisé) à la valeur SIZE_UNAVAILABLE du
+// frontend (public/assets/inscription.js) : option "Ma taille n'est pas
+// disponible" à l'étape Commandes. Un article portant cette valeur n'est ni
+// vérifié en stock ni synchronisé vers la boutique — le club recontacte
+// l'adhérent pour convenir de la taille réelle.
+const SIZE_UNAVAILABLE = "INDISPONIBLE";
+
 function detectClothingKind(product) {
   const name = String(product?.name || "").toLowerCase();
   if (name.includes("t-shirt") || name.includes("tshirt")) return "tshirt";
@@ -133,7 +140,7 @@ function buildClothingSyncItems(stock, clothingOrder = {}) {
     const qty = Math.max(0, Number(clothingOrder?.[`${kind}Qty`] || 0));
     const size = normalizeSize(clothingOrder?.[`${kind}Size`] || "");
     const product = stock?.[kind];
-    if (!qty) continue;
+    if (!qty || size === SIZE_UNAVAILABLE) continue;
     if (!product?.productId || !size) {
       throw new Error(`Produit boutique introuvable pour ${kind}`);
     }
@@ -156,6 +163,7 @@ function assertAdditionalOrderItemsStock(boutiqueProducts, orderItems = []) {
     if (!product) throw new Error(`Produit boutique introuvable pour ${item?.name || item?.id || productId}`);
     if (item?.requiresSize || product.sizes?.length) {
       const size = normalizeSize(item?.size || "");
+      if (size === SIZE_UNAVAILABLE) continue;
       if (!size) throw new Error(`Taille manquante pour ${product.name}`);
       const available = Math.max(0, Number(product.stockBySize?.[size] ?? 0));
       if (available < quantity) throw new Error(`Stock insuffisant pour ${product.name} en taille ${size} (disponible: ${available})`);
@@ -167,7 +175,7 @@ function assertAdditionalOrderItemsStock(boutiqueProducts, orderItems = []) {
 
 function buildAdditionalOrderSyncItems(orderItems = []) {
   return (orderItems || [])
-    .filter((item) => Number(item?.quantity || 0) > 0 && String(item?.source || "") === "boutique")
+    .filter((item) => Number(item?.quantity || 0) > 0 && String(item?.source || "") === "boutique" && normalizeSize(item?.size || "") !== SIZE_UNAVAILABLE)
     .map((item) => ({
       product_id: Number(item.boutiqueProductId),
       quantity: Number(item.quantity),
@@ -180,6 +188,7 @@ function assertClothingOrderStock(stock, clothingOrder = {}) {
     const qty = Math.max(0, Number(clothingOrder?.[`${kind}Qty`] || 0));
     const size = normalizeSize(clothingOrder?.[`${kind}Size`] || "");
     if (!qty) continue;
+    if (size === SIZE_UNAVAILABLE) continue;
     if (!size) throw new Error(`Taille manquante pour ${kind}`);
     const available = getAvailableSizeStock(stock, kind, size);
     if (available < qty) {
