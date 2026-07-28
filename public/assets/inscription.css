@@ -1,8 +1,7 @@
 html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 :root{
-  --bg:#f5efe4;
+  --cream:#f5efe4;
   --paper:#fffdf9;
-  --paper-strong:#fffdf9;
   --ink:#1a2430;
   --muted:#607080;
   --line:rgba(15,23,32,.14);
@@ -398,7 +397,7 @@ a{color:inherit}
   padding:0 28px;
 }
 .closed-banner-card{
-  background:var(--paper-strong);
+  background:var(--paper);
   border:1px solid var(--line);
   border-radius:var(--radius);
   box-shadow:var(--shadow);
@@ -482,7 +481,7 @@ a{color:inherit}
 }
 .feature-panel,.policy-section{
   border-radius:26px;
-  background:var(--paper-strong);
+  background:var(--paper);
   border:1px solid rgba(110,95,85,.16);
   box-shadow:var(--shadow);
   padding:24px;
@@ -854,7 +853,7 @@ a{color:inherit}
   border:1px solid var(--line);
   margin-bottom:7px;
 }
-.size-guide-table thead tr{background:var(--paper-strong)}
+.size-guide-table thead tr{background:var(--paper)}
 .size-guide-table th{
   padding:6px 10px;
   text-align:left;
