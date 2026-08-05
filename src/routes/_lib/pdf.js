@@ -311,6 +311,20 @@ function esc(v) {
     .replace(/\)/g, '\\)');
 }
 
+// Doit rester synchronise avec SIZE_UNAVAILABLE dans public/assets/inscription.js
+// et src/routes/_lib/boutique-stock.js. La colonne "Taille" du tableau S4 ne
+// fait qu'environ 20mm de large (cf. colXs) : la phrase complete choisie
+// dans le formulaire y deborderait sur la colonne "Qte" voisine, d'ou ce
+// libelle court specifique a l'affichage PDF.
+const SIZE_UNAVAILABLE = "Ma taille n'est pas disponible";
+
+function displaySize(size) {
+    const s = safe(size);
+    if (!s) return '-';
+    if (s === safe(SIZE_UNAVAILABLE)) return 'A confirmer';
+    return s;
+}
+
 // ─── Conversion coordonnées : mm depuis haut de page → pt depuis bas ─────────
 
 function yPt(yMm, pageIndex = 0) {
@@ -943,8 +957,8 @@ export async function generateAdherentPdf(registration, photo = null, env = null
     const pricePantalon= Number(totals.pricingPantalon || 15);
 
     const tenueRows = [
-        ['T-shirt club AFFBC',  `${priceTshirt} EUR`,  safe(co.tshirtSize)   || '-', tshirtQty,   `${(tshirtQty   * priceTshirt  ).toFixed(2)} EUR`],
-        ['Pantalon club AFFBC', `${pricePantalon} EUR`, safe(co.pantalonSize) || '-', pantalonQty, `${(pantalonQty * pricePantalon).toFixed(2)} EUR`],
+        ['T-shirt club AFFBC',  `${priceTshirt} EUR`,  displaySize(co.tshirtSize),   tshirtQty,   `${(tshirtQty   * priceTshirt  ).toFixed(2)} EUR`],
+        ['Pantalon club AFFBC', `${pricePantalon} EUR`, displaySize(co.pantalonSize), pantalonQty, `${(pantalonQty * pricePantalon).toFixed(2)} EUR`],
     ];
     tenueRows.forEach(row => {
         ensureSpace(9);

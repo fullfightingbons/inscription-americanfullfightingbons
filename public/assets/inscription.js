@@ -268,6 +268,14 @@ function getClothingStockEntry(kind) {
   return CONFIG?.clothingStock?.[kind] || null;
 }
 
+// Choix propose quand l'adherent ne trouve pas sa taille dans la liste, pour
+// ne pas bloquer l'inscription a l'etape Commandes. Doit rester synchronise
+// avec SIZE_UNAVAILABLE dans src/routes/_lib/pdf.js (affichage PDF) et
+// src/routes/_lib/boutique-stock.js (validation + sync stock cote serveur —
+// celui-ci compare en majuscules via normalizeSize, donc la casse ici n'a
+// pas besoin de correspondre exactement, seul le texte compte).
+const SIZE_UNAVAILABLE = "Ma taille n'est pas disponible";
+
 function getClothingSizeOptions(kind) {
   const entry = getClothingStockEntry(kind);
   if (entry?.sizes?.length) return entry.sizes;
@@ -275,6 +283,7 @@ function getClothingSizeOptions(kind) {
 }
 
 function getClothingSizeStock(kind, size) {
+  if (size === SIZE_UNAVAILABLE) return null; // pas une vraie taille : pas de contrainte de stock
   const entry = getClothingStockEntry(kind);
   if (!entry || !size) return null;
   return Number(entry.stockBySize?.[String(size).toUpperCase()] ?? 0);
@@ -294,6 +303,7 @@ function updateClothingAvailability() {
     }
     if (hint) {
       if (!size) hint.textContent = 'Choisissez une taille pour voir le stock.';
+      else if (size === SIZE_UNAVAILABLE) hint.textContent = 'Pas de souci : le club vous recontactera pour convenir de la taille avant de preparer la commande.';
       else if (available == null) hint.textContent = 'Stock boutique indisponible pour le moment.';
       else if (available <= 0) hint.textContent = 'Rupture sur cette taille.';
       else hint.textContent = `Stock disponible: ${available}`;
@@ -788,13 +798,13 @@ function renderClothingOrder() {
     const disabled = stock != null && stock <= 0;
     const suffix = stock == null ? '' : ` · ${stock} dispo`;
     return `<option value="${size}" ${disabled ? 'disabled' : ''}>${size}${suffix}</option>`;
-  }).join('');
+  }).join('') + `<option value="${SIZE_UNAVAILABLE}">${SIZE_UNAVAILABLE}</option>`;
   const pantalonOptions = getClothingSizeOptions('pantalon').map(size => {
     const stock = getClothingSizeStock('pantalon', size);
     const disabled = stock != null && stock <= 0;
     const suffix = stock == null ? '' : ` · ${stock} dispo`;
     return `<option value="${size}" ${disabled ? 'disabled' : ''}>${size}${suffix}</option>`;
-  }).join('');
+  }).join('') + `<option value="${SIZE_UNAVAILABLE}">${SIZE_UNAVAILABLE}</option>`;
   const tshirtTotalStock = getClothingStockEntry('tshirt')?.stock;
   const pantalonTotalStock = getClothingStockEntry('pantalon')?.stock;
   const extraRows = getOrderProducts().map((product) => {

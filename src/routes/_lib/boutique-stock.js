@@ -10,6 +10,16 @@ function normalizeSize(value) {
   return String(value || "").trim().toUpperCase();
 }
 
+// Valeur choisie quand l'adherent ne trouve pas sa taille dans la liste
+// (menu "Taille" du formulaire, cf. SIZE_UNAVAILABLE dans
+// public/assets/inscription.js et src/routes/_lib/pdf.js — les trois
+// doivent rester synchronisees). Ce n'est pas une vraie taille du
+// catalogue boutique : on l'exclut donc de la verification de stock
+// (assertClothingOrderStock) et de la synchronisation d'inventaire
+// (buildClothingSyncItems) plutot que de la faire echouer comme une
+// rupture. Le club recontacte l'adherent pour convenir de la taille.
+const SIZE_UNAVAILABLE = normalizeSize("Ma taille n'est pas disponible");
+
 function detectClothingKind(product) {
   const name = String(product?.name || "").toLowerCase();
   if (name.includes("t-shirt") || name.includes("tshirt")) return "tshirt";
@@ -132,8 +142,9 @@ function buildClothingSyncItems(stock, clothingOrder = {}) {
   for (const kind of ["tshirt", "pantalon"]) {
     const qty = Math.max(0, Number(clothingOrder?.[`${kind}Qty`] || 0));
     const size = normalizeSize(clothingOrder?.[`${kind}Size`] || "");
-    const product = stock?.[kind];
     if (!qty) continue;
+    if (size === SIZE_UNAVAILABLE) continue; // taille a confirmer avec l'adherent : rien a decrementer
+    const product = stock?.[kind];
     if (!product?.productId || !size) {
       throw new Error(`Produit boutique introuvable pour ${kind}`);
     }
@@ -181,6 +192,7 @@ function assertClothingOrderStock(stock, clothingOrder = {}) {
     const size = normalizeSize(clothingOrder?.[`${kind}Size`] || "");
     if (!qty) continue;
     if (!size) throw new Error(`Taille manquante pour ${kind}`);
+    if (size === SIZE_UNAVAILABLE) continue; // pas de stock associe : ne bloque pas l'inscription
     const available = getAvailableSizeStock(stock, kind, size);
     if (available < qty) {
       throw new Error(`Stock insuffisant pour ${kind} en taille ${size} (disponible: ${available})`);
