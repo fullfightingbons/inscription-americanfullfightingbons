@@ -285,7 +285,7 @@ async function storeRegistrationPdf(env, db, registrationId, payload, totals, ad
       .bind(registrationId)
       .first();
     const photo = await fetchPhotoDocument(env, registrationRow?.documents_json);
-    const pdfBytes = await generateAdherentPdf(pdfPayload, photo);
+    const pdfBytes = await generateAdherentPdf(pdfPayload, photo, env);
     const fileName = `inscription-affbc-${String(registrationId).slice(0, 8)}.pdf`;
     const r2Key = `adherents/${adherentId}/inscription-${String(registrationId).slice(0, 8)}.pdf`;
     const bucket = env.R2_PDF || env.R2_STORAGE;

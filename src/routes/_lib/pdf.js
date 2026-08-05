@@ -35,7 +35,15 @@
  * Utilisation :
  *   import { generateAdherentPdf, fetchPhotoDocument } from '../_lib/pdf.js';
  *   const photo = await fetchPhotoDocument(env, registration.documents_json);
- *   const pdfBytes = await generateAdherentPdf(registration, photo);   // Uint8Array
+ *   const pdfBytes = await generateAdherentPdf(registration, photo, env);   // Uint8Array
+ *
+ * Logo d'en-tête :
+ *   Même principe que la photo, mais pour un asset fixe du Worker plutôt
+ *   qu'un fichier par adhérent : env (binding ASSETS) permet de récupérer
+ *   public/assets/Logo_1_nnoir_copie-removebg-preview.png et de l'embarquer
+ *   à la place du médaillon-texte "FULL FIGHTING / BONS EN CHABLAIS" dessiné
+ *   jusqu'ici. Le paramètre env est optionnel : sans lui (ou si l'asset ne
+ *   charge pas), le médaillon-texte d'origine reste affiché.
  */
 
 import { currentSeasonLabel } from './helpers.js';
@@ -563,14 +571,47 @@ async function resolvePhotoImage(p, photo) {
     return null;
 }
 
+// ─── Résolution du logo du club (asset statique embarqué) ────────────────────
+// Le vrai logo (public/assets/Logo_1_nnoir_copie-removebg-preview.png) n'était
+// jusqu'ici jamais embarqué dans le PDF : le cercle d'en-tête était dessiné à
+// la main (fond blanc + anneau + texte "FULL FIGHTING / BONS EN CHABLAIS"),
+// un médaillon-texte qui tenait lieu de logo. On va maintenant chercher le
+// vrai fichier via le binding ASSETS (Fetcher, cf. `assets.binding` dans
+// wrangler.json — le même mécanisme que `env.ASSETS.fetch(request)` dans
+// index.ts) et on le décode avec exactement le même pipeline PNG que
+// resolvePhotoImage() ci-dessus (fichier vérifié : 8 bits/canal, RGBA,
+// non entrelacé → pleinement supporté par decodePngToRgb).
+// Retourne null si `env` n'est pas fourni ou si l'asset est introuvable : le
+// PDF retombe alors sur le médaillon-texte d'origine (comportement inchangé).
+const LOGO_ASSET_PATH = '/assets/Logo_1_nnoir_copie-removebg-preview.png';
+
+async function resolveLogoImage(p, env) {
+    if (!env?.ASSETS) return null;
+    try {
+        const res = await env.ASSETS.fetch(new URL(LOGO_ASSET_PATH, 'https://assets.internal/'));
+        if (!res.ok) return null;
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        if (!(bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47)) return null; // pas un PNG
+        const decoded = await decodePngToRgb(bytes);
+        if (!decoded) return null;
+        const flate = await deflateZlib(decoded.rgb);
+        return p.addImage(flate, { filter: 'FlateDecode', colorSpace: 'DeviceRGB', bpc: 8, width: decoded.width, height: decoded.height });
+    } catch (e) {
+        return null; // asset absent/illisible : on retombe sur le médaillon texte
+    }
+}
+
 /**
  * @param {object} registration  Données du dossier (format dossier JSON de status.js)
  * @param {{bytes: Uint8Array, contentType: string}|null} [photo]
  *        Photo d'identité déjà récupérée via fetchPhotoDocument(). Optionnel :
  *        si absente, le PDF affiche le cadre "Photo d'identite" comme avant.
+ * @param {object|null} [env]
+ *        Bindings Worker (pour env.ASSETS, cf. resolveLogoImage). Optionnel :
+ *        si absent, le logo d'en-tête retombe sur le médaillon-texte d'origine.
  * @returns {Promise<Uint8Array>}
  */
-export async function generateAdherentPdf(registration, photo = null) {
+export async function generateAdherentPdf(registration, photo = null, env = null) {
     const id    = registration.identity        || {};
     const ct    = registration.contact         || {};
     const em    = registration.emergency       || {};
@@ -595,6 +636,7 @@ export async function generateAdherentPdf(registration, photo = null) {
 
     const p = new PdfBuilder();
     const photoImage = await resolvePhotoImage(p, photo);
+    const logoImage  = await resolveLogoImage(p, env);
 
     // ── Curseur vertical courant (mm depuis le haut de la page courante) ────────
     let y = 0;
@@ -697,10 +739,22 @@ export async function generateAdherentPdf(registration, photo = null) {
     p.setLineWidth(0.3);
     p.circle(LOGO_CX, LOGO_CY, LOGO_R - 1.5, 'S');
 
-    // Texte centré dans le cercle
-    p.text('FULL',             LOGO_CX, LOGO_CY - 4.5, { fontSize: 7.5, color: RED,  align: 'center' });
-    p.text('FIGHTING',         LOGO_CX, LOGO_CY + 1.5, { fontSize: 7.5, color: RED,  align: 'center' });
-    p.text('BONS EN CHABLAIS', LOGO_CX, LOGO_CY + 6.5, { fontSize: 5,   color: DARK, align: 'center' });
+    if (logoImage) {
+        // Vrai logo, inscrit dans l'anneau interieur (cote choisi pour que la
+        // diagonale de la boite reste sous LOGO_R - 1.5, sans chevaucher les
+        // anneaux) ; drawImageContain preserve le ratio, pas de deformation.
+        const LOGO_BOX = 20; // mm
+        p.drawImageContain(
+            logoImage.id,
+            LOGO_CX - LOGO_BOX / 2, LOGO_CY - LOGO_BOX / 2, LOGO_BOX, LOGO_BOX,
+            logoImage.width, logoImage.height,
+        );
+    } else {
+        // Repli : medaillon-texte d'origine (asset introuvable / env absent)
+        p.text('FULL',             LOGO_CX, LOGO_CY - 4.5, { fontSize: 7.5, color: RED,  align: 'center' });
+        p.text('FIGHTING',         LOGO_CX, LOGO_CY + 1.5, { fontSize: 7.5, color: RED,  align: 'center' });
+        p.text('BONS EN CHABLAIS', LOGO_CX, LOGO_CY + 6.5, { fontSize: 5,   color: DARK, align: 'center' });
+    }
 
     const fx = ML/MM + LOGO_R * 2 + 5;   // texte header décalé après le logo
     p.text('AMERICAN FULL FIGHTING BONS EN CHABLAIS',      fx, 9,    { fontSize: 7.1, color: [255, 247, 237] });
