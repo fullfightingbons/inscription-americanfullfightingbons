@@ -1109,6 +1109,58 @@ function buildPayload() {
   };
 }
 
+// ─── Compression de la photo d'identité avant envoi ──────────────────────────
+// Les photos prises au téléphone font souvent plusieurs Mo (ex: 2448×3264px)
+// pour un usage final où elles s'affichent en tout petit (cadre "Photo
+// d'identité" du PDF, ~30×35mm). On les redimensionne et recompresse côté
+// client avant l'envoi : upload plus rapide sur réseau mobile, moins de
+// stockage R2, PDF plus léger — sans rien changer côté serveur (qui reçoit
+// toujours un File JPEG/PNG classique, comme avant).
+// `imageOrientation: 'from-image'` applique la rotation EXIF (photos prises
+// en portrait) avant de dessiner sur le canvas : sans ça, certaines photos
+// ressortiraient couchées. Toute erreur (format non décodable, mémoire...)
+// fait retomber sur le fichier original tel quel — la compression est un
+// bonus, jamais une condition bloquante pour l'inscription.
+const PHOTO_MAX_DIMENSION    = 800;         // px, plus grand côté
+const PHOTO_JPEG_QUALITY     = 0.8;
+const PHOTO_SKIP_UNDER_BYTES = 400 * 1024;  // déjà assez léger : on ne retouche pas
+
+async function compressPhotoFile(file) {
+  if (!file || !(file instanceof File)) return file;
+  if (!file.type || !file.type.startsWith('image/')) return file;
+  if (file.size <= PHOTO_SKIP_UNDER_BYTES) return file;
+  if (typeof createImageBitmap !== 'function') return file;
+
+  try {
+    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    const scale = Math.min(1, PHOTO_MAX_DIMENSION / Math.max(bitmap.width, bitmap.height));
+    const targetW = Math.max(1, Math.round(bitmap.width * scale));
+    const targetH = Math.max(1, Math.round(bitmap.height * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = targetW;
+    canvas.height = targetH;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) { bitmap.close?.(); return file; }
+    ctx.drawImage(bitmap, 0, 0, targetW, targetH);
+    bitmap.close?.();
+
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', PHOTO_JPEG_QUALITY));
+    if (!blob) return file; // toBlob a échoué : on garde l'original
+
+    const compressed = new File(
+      [blob],
+      (file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg',
+      { type: 'image/jpeg' },
+    );
+    // Garde-fou : dans le rare cas où la version "compressée" ressort plus
+    // lourde que l'originale, on garde l'originale.
+    return compressed.size < file.size ? compressed : file;
+  } catch (e) {
+    return file; // n'importe quel souci : on envoie le fichier original
+  }
+}
+
 // ─── Soumission du formulaire ─────────────────────────────────────────────────
 
 async function submitForm(event) {
@@ -1118,7 +1170,7 @@ async function submitForm(event) {
   if (error) { setAlert(error); return; }
 
   const btn = g('submit-button');
-  if (btn) { btn.disabled = true; btn.textContent = 'Envoi en cours…'; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Préparation…'; }
   setAlert('');
 
   try {
@@ -1127,8 +1179,12 @@ async function submitForm(event) {
     formData.append('payload', JSON.stringify(payload));
 
     // Fichiers
-    const photoFile = g('photoIdentity')?.files?.[0];
-    if (photoFile) formData.append('photoIdentity', photoFile);
+    const photoFileRaw = g('photoIdentity')?.files?.[0];
+    if (photoFileRaw) {
+      if (btn) btn.textContent = 'Compression de la photo…';
+      const photoFile = await compressPhotoFile(photoFileRaw);
+      formData.append('photoIdentity', photoFile);
+    }
 
     const certFile = g('medicalCertificate')?.files?.[0];
     if (certFile) formData.append('medicalCertificate', certFile);
@@ -1142,6 +1198,7 @@ async function submitForm(event) {
     // Honeypot
     formData.append('website', '');
 
+    if (btn) btn.textContent = 'Envoi en cours…';
     const res = await fetch(SUBMIT_URL, { method: 'POST', body: formData });
     const data = await res.json().catch(() => null);
 
