@@ -632,6 +632,21 @@ function showStep(index) {
   updateSummary();
   setAlert('');
   window.scrollTo({ top: 0, behavior: 'smooth' });
+  focusStepHeading(index);
+}
+
+// Déplace le focus clavier/lecteur d'écran vers le titre de l'étape affichée.
+// Sans ça, après un clic sur "Suivant"/"Précédent", le focus reste sur le
+// bouton (parfois masqué juste après) : un utilisateur clavier ou lecteur
+// d'écran ne "voit" jamais qu'il vient de changer d'étape. tabindex="-1"
+// rend le titre focusable par script sans l'ajouter à la navigation Tab
+// normale (pattern standard pour les vues qui changent en SPA).
+// preventScroll évite un conflit avec le window.scrollTo() juste au-dessus.
+function focusStepHeading(index) {
+  const heading = document.querySelector(`.step-panel[data-step="${index}"] h2`);
+  if (!heading) return;
+  heading.setAttribute('tabindex', '-1');
+  heading.focus({ preventScroll: true });
 }
 
 function canNavigateToStep(targetStep) {
