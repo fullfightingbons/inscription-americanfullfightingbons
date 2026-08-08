@@ -14,8 +14,8 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
   --shadow:0 24px 60px rgba(7,17,29,.12);
   --radius:24px;
   --radius-sm:16px;
-  --container-max:clamp(1180px,75vw,1440px);
-  --shell-max:clamp(1440px,75vw,1600px);
+  --container-max:clamp(1180px,75vw,1760px);
+  --shell-max:clamp(1440px,75vw,1900px);
 }
 
 *{box-sizing:border-box}
