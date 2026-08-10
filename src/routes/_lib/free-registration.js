@@ -183,11 +183,12 @@ async function insertFreeSalesIfAny(db, registrationId, adherentId, nom, prenom,
   const id = crypto.randomUUID();
   const numero = await nextFactureNumero(db, exercise?.id);
   const lignes = [];
-  if (totals.tshirtQty > 0) lignes.push({ desc: `T-shirt club AFFBC (${clothingOrder?.tshirtSize || "-"})`, qte: totals.tshirtQty, pu: totals.pricingTshirt || 25 });
-  if (totals.pantalonQty > 0) lignes.push({ desc: `Pantalon club AFFBC (${clothingOrder?.pantalonSize || "-"})`, qte: totals.pantalonQty, pu: totals.pricingPantalon || 15 });
-  if (passportTotal > 0) lignes.push({ desc: "Passeport sportif", qte: 1, pu: passportTotal });
+  if (Number(totals.newMemberKit || 0) > 0) lignes.push({ desc: "Vente kit nouvel adhérent", qte: 1, pu: Number(totals.newMemberKit || 0) });
+  if (totals.tshirtQty > 0) lignes.push({ desc: `Vente t-shirt club AFFBC (${clothingOrder?.tshirtSize || "-"})`, qte: totals.tshirtQty, pu: totals.pricingTshirt || 25 });
+  if (totals.pantalonQty > 0) lignes.push({ desc: `Vente pantalon club AFFBC (${clothingOrder?.pantalonSize || "-"})`, qte: totals.pantalonQty, pu: totals.pricingPantalon || 15 });
+  if (passportTotal > 0) lignes.push({ desc: "Vente passeport sportif", qte: 1, pu: passportTotal });
   for (const item of totals.orderItems || []) {
-    if (Number(item.quantity || 0) > 0) lignes.push({ desc: item.name, qte: item.quantity, pu: item.unitPrice });
+    if (Number(item.quantity || 0) > 0) lignes.push({ desc: `Vente ${item.name}`, qte: item.quantity, pu: item.unitPrice });
   }
 
   const row = {

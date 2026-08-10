@@ -250,36 +250,32 @@ async function nextFactureNumero(db, exercice_id) {
   return `VTE-${year}-${String(n).padStart(3, "0")}-${ts}`;
 }
 
-async function insertInscriptionSales(db, registrationId, adherentId, nom, prenom, adresse, totals, exercise) {
-  const now = new Date().toISOString();
-  const id = crypto.randomUUID();
-  const numero = await nextFactureNumero(db, exercise?.id);
-
+export function buildInscriptionSaleLines(totals) {
   const lignes = [];
   if (Number(totals.newMemberKit || 0) > 0) {
     lignes.push({
-      desc: "Supplément tenue nouvel adhérent",
+      desc: "Vente kit nouvel adhérent",
       qte: 1,
       pu: Number(totals.newMemberKit || 0),
     });
   }
   if (Number(totals.passport || 0) > 0) {
     lignes.push({
-      desc: "Passeport sportif",
+      desc: "Vente passeport sportif",
       qte: 1,
       pu: Number(totals.passport || 0),
     });
   }
   if (totals.tshirtQty > 0) {
     lignes.push({
-      desc: "T-shirt club AFFBC",
+      desc: "Vente t-shirt club AFFBC",
       qte: totals.tshirtQty,
       pu: totals.pricingTshirt,
     });
   }
   if (totals.pantalonQty > 0) {
     lignes.push({
-      desc: "Pantalon club AFFBC",
+      desc: "Vente pantalon club AFFBC",
       qte: totals.pantalonQty,
       pu: totals.pricingPantalon,
     });
@@ -288,11 +284,29 @@ async function insertInscriptionSales(db, registrationId, adherentId, nom, preno
     if (Number(item.quantity || 0) <= 0) continue;
     const sizeSuffix = item.size ? ` (${item.size})` : "";
     lignes.push({
-      desc: `${item.name}${sizeSuffix}`,
+      desc: `Vente ${item.name}${sizeSuffix}`,
       qte: Number(item.quantity || 0),
       pu: Number(item.unitPrice || 0),
     });
   }
+  const explicitExtraTotal = (totals.orderItems || [])
+  .reduce((sum, item) => sum + (Number(item.quantity || 0) * Number(item.unitPrice || 0)), 0);
+  const fallbackExtraTotal = Number(totals.extraProductsTotal || 0) - explicitExtraTotal;
+  if (fallbackExtraTotal > 0) {
+    lignes.push({
+      desc: "Vente produits additionnels",
+      qte: 1,
+      pu: fallbackExtraTotal,
+    });
+  }
+  return lignes;
+}
+
+async function insertInscriptionSales(db, registrationId, adherentId, nom, prenom, adresse, totals, exercise) {
+  const now = new Date().toISOString();
+  const id = crypto.randomUUID();
+  const numero = await nextFactureNumero(db, exercise?.id);
+  const lignes = buildInscriptionSaleLines(totals);
 
   if (lignes.length === 0) return null; // rien à créer
 
@@ -336,6 +350,14 @@ async function insertJournalEntryPair(db, entries) {
     .bind(...columns.map((c) => entry[c]))
     .run();
   }
+}
+
+async function replaceJournalEntryGroup(db, pieceBase, entries) {
+  await db
+  .prepare(`DELETE FROM journal_comptable WHERE piece = ? OR piece LIKE ?`)
+  .bind(pieceBase, `${pieceBase}-%`)
+  .run();
+  await insertJournalEntryPair(db, entries);
 }
 
 async function findHelloAssoBankAccountId(db) {
@@ -481,7 +503,6 @@ async function insertCotisationJournal(db, adherentId, nom, prenom, totals, exer
   const labelName = `${nom} ${prenom}`.trim();
   const common = {
     date_op: dateOp,
-    piece,
     source_type: "adherent",
     source_id: adherentId,
     source_logiciel: "inscription-web",
@@ -490,10 +511,11 @@ async function insertCotisationJournal(db, adherentId, nom, prenom, totals, exer
     updated_at: now,
   };
 
-  await insertJournalEntryPair(db, [
+  await replaceJournalEntryGroup(db, piece, [
     {
       id: crypto.randomUUID(),
                                ...common,
+                               piece: `${piece}-CLI`,
                                compte: "411 - Adhérents et clients",
                                libelle: `Adhésion ${labelName}`,
                                debit: Number(totals.cotisation || 0),
@@ -502,6 +524,7 @@ async function insertCotisationJournal(db, adherentId, nom, prenom, totals, exer
     {
       id: crypto.randomUUID(),
                                ...common,
+                               piece: `${piece}-COT`,
                                compte: "7561 - Cotisations membres actifs",
                                libelle: `Cotisation ${labelName}`,
                                debit: 0,
@@ -512,12 +535,52 @@ async function insertCotisationJournal(db, adherentId, nom, prenom, totals, exer
   return piece;
 }
 
-async function insertVenteTenueJournal(db, factureId, nom, prenom, totals, exercise, paidAt) {
-  const clothingTotal = Number(totals.clothingTotal || 0);
+export function buildVenteTenueJournalCreditLines(totals, common, libelleBase) {
+  const entries = [];
   const newMemberKitTotal = Number(totals.newMemberKit || 0);
   const passportTotal = Number(totals.passport || 0);
-  const extraProductsTotal = Number(totals.extraProductsTotal || 0);
-  const totalSales = clothingTotal + newMemberKitTotal + passportTotal + extraProductsTotal;
+  const tshirtTotal = Number(totals.tshirtQty || 0) * Number(totals.pricingTshirt || 0);
+  const pantalonTotal = Number(totals.pantalonQty || 0) * Number(totals.pricingPantalon || 0);
+  const explicitExtraTotal = (totals.orderItems || [])
+  .reduce((sum, item) => sum + (Number(item.quantity || 0) * Number(item.unitPrice || 0)), 0);
+  const extraProductsTotal = Math.max(Number(totals.extraProductsTotal || 0), explicitExtraTotal);
+  const equipmentTotal = newMemberKitTotal + tshirtTotal + pantalonTotal + extraProductsTotal;
+
+  if (equipmentTotal > 0) {
+    entries.push({
+      id: crypto.randomUUID(),
+      ...common,
+      piece: `${common.pieceBase}-ART`,
+      compte: "707 - Ventes vêtements et équipements",
+      libelle: `${libelleBase} - Vente articles club`,
+      debit: 0,
+      credit: equipmentTotal,
+    });
+  }
+  if (passportTotal > 0) {
+    entries.push({
+      id: crypto.randomUUID(),
+      ...common,
+      piece: `${common.pieceBase}-PAS`,
+      compte: "7562 - Cotisations licences et adhésions annexes",
+      libelle: `${libelleBase} - Vente passeport sportif`,
+      debit: 0,
+      credit: passportTotal,
+    });
+  }
+
+  return entries.map(({ pieceBase, ...entry }) => entry);
+}
+
+async function insertVenteTenueJournal(db, factureId, nom, prenom, totals, exercise, paidAt) {
+  const newMemberKitTotal = Number(totals.newMemberKit || 0);
+  const passportTotal = Number(totals.passport || 0);
+  const tshirtTotal = Number(totals.tshirtQty || 0) * Number(totals.pricingTshirt || 0);
+  const pantalonTotal = Number(totals.pantalonQty || 0) * Number(totals.pricingPantalon || 0);
+  const extraProductsTotal = (totals.orderItems || [])
+  .reduce((sum, item) => sum + (Number(item.quantity || 0) * Number(item.unitPrice || 0)), 0);
+  const effectiveExtraProductsTotal = Math.max(Number(totals.extraProductsTotal || 0), extraProductsTotal);
+  const totalSales = tshirtTotal + pantalonTotal + newMemberKitTotal + passportTotal + effectiveExtraProductsTotal;
   if (!factureId || !totalSales) return null;
   const now = new Date().toISOString();
   const dateOp = String(paidAt || now).slice(0, 10);
@@ -531,7 +594,7 @@ async function insertVenteTenueJournal(db, factureId, nom, prenom, totals, exerc
   const libelleBase = `Vente - ${labelName}${suffix}`;
   const common = {
     date_op: dateOp,
-    piece,
+    pieceBase: piece,
     source_type: "facture",
     source_id: factureId,
     source_logiciel: "inscription-web",
@@ -544,44 +607,16 @@ async function insertVenteTenueJournal(db, factureId, nom, prenom, totals, exerc
     {
       id: crypto.randomUUID(),
       ...common,
+      piece: `${piece}-CLI`,
       compte: "411 - Adhérents et clients",
       libelle: `${libelleBase} - Vente inscription`,
       debit: totalSales,
       credit: 0,
     },
+    ...buildVenteTenueJournalCreditLines(totals, common, libelleBase),
   ];
-  if (clothingTotal > 0 || newMemberKitTotal > 0) {
-    entries.push({
-      id: crypto.randomUUID(),
-                 ...common,
-                 compte: "707 - Ventes vêtements et équipements",
-                 libelle: `${libelleBase} - Vente de Tenue`,
-                 debit: 0,
-                 credit: clothingTotal + newMemberKitTotal,
-    });
-  }
-  if (extraProductsTotal > 0) {
-    entries.push({
-      id: crypto.randomUUID(),
-                 ...common,
-                 compte: "707 - Ventes vêtements et équipements",
-                 libelle: `${libelleBase} - Produits additionnels`,
-                 debit: 0,
-                 credit: extraProductsTotal,
-    });
-  }
-  if (passportTotal > 0) {
-    entries.push({
-      id: crypto.randomUUID(),
-                 ...common,
-                 compte: "7562 - Cotisations licences et adhésions annexes",
-                 libelle: `${libelleBase} - Passeport sportif`,
-                 debit: 0,
-                 credit: passportTotal,
-    });
-  }
 
-  await insertJournalEntryPair(db, entries);
+  await replaceJournalEntryGroup(db, piece, entries.map(({ pieceBase, ...entry }) => entry));
 
   return piece;
 }
@@ -595,7 +630,6 @@ async function insertPassRegionJournal(db, adherentId, nom, prenom, totals, exer
   const labelName = `${nom} ${prenom}`.trim();
   const common = {
     date_op: dateOp,
-    piece,
     source_type: "adherent",
     source_id: adherentId,
     source_logiciel: "inscription-web",
@@ -604,10 +638,11 @@ async function insertPassRegionJournal(db, adherentId, nom, prenom, totals, exer
     updated_at: now,
   };
 
-  await insertJournalEntryPair(db, [
+  await replaceJournalEntryGroup(db, piece, [
     {
       id: crypto.randomUUID(),
                                ...common,
+                               piece: `${piece}-ATT`,
                                compte: "471 - Comptes d attente",
                                libelle: `Pass Région ${labelName}`,
                                debit: amount,
@@ -616,6 +651,7 @@ async function insertPassRegionJournal(db, adherentId, nom, prenom, totals, exer
     {
       id: crypto.randomUUID(),
                                ...common,
+                               piece: `${piece}-SUB`,
                                compte: "7410 - Remboursements Pass Région",
                                libelle: `Subvention Pass Région ${labelName}`,
                                debit: 0,
