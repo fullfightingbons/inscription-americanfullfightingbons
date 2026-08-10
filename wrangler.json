@@ -25,14 +25,6 @@
     "PAYMENT_CURRENCY": "EUR",
     "HELLOASSO_ORGANIZATION_SLUG": "american-full-fighting-bons-en-chablais",
     "HELLOASSO_ENV": "production"
-    // BANK_HOLDER / BANK_IBAN / BANK_BIC / BANK_NAME / BANK_ADDRESS /
-    // BANK_TRANSFER_LABEL retirés : ce sont des "vars" versionnées en clair
-    // dans ce fichier, donc jamais un bon endroit pour un IBAN réel. Le code
-    // (inscription-config.js) lit déjà en priorité club_info.public_inscription_*
-    // (table D1 partagée, éditable depuis l'admin gestion) — c'est ce chemin-là
-    // qu'il faut utiliser pour activer le virement bancaire. Si un fallback via
-    // variable d'environnement est vraiment nécessaire, utiliser
-    // `wrangler secret put BANK_IBAN` (etc.) plutôt qu'une entrée ici.
   },
   "d1_databases": [
     {

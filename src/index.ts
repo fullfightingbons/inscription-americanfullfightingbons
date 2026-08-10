@@ -73,6 +73,11 @@ async function routeApi(request: Request, env: Env, pathname: string): Promise<R
 
   const context: RouteContext = { request, env };
 
+  if (pathname === "/api/public/inscription-config" &&
+      (request.method === "GET" || request.method === "HEAD")) {
+    return getInscriptionConfig(context);
+  }
+
   if (pathname === "/api/public/adherent-eligibility" && request.method === "GET") {
     return getAdherentEligibility(context);
   }

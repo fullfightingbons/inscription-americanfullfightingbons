@@ -23,7 +23,7 @@
 	"scripts": {
 		"cf-typegen": "wrangler types",
 		"typecheck": "tsc --noEmit",
-		"check": "tsc --noEmit && wrangler deploy --dry-run",
+		"check": "npm run typecheck && npm test && wrangler deploy --dry-run",
 		"deploy": "wrangler deploy",
 		"dev": "npm run seedLocalD1 && wrangler dev",
 		"predeploy": "wrangler d1 migrations apply DB --remote",

@@ -76,6 +76,8 @@ Variables non sensibles déjà déclarées :
 - `HELLOASSO_ORGANIZATION_SLUG`
 - `HELLOASSO_ENV`
 
+Les informations bancaires réelles (`BANK_IBAN`, `BANK_BIC`, etc.) ne doivent pas être ajoutées dans `wrangler.json`, car ce fichier est versionné en clair. La configuration publique d'inscription lit d'abord les champs `club_info.public_inscription_*` dans la base D1 partagée, éditable depuis l'admin gestion. Si un fallback par variable d'environnement devient nécessaire, utiliser `wrangler secret put`.
+
 Secrets attendus côté Cloudflare selon l'environnement :
 
 - `HELLOASSO_CLIENT_ID`
