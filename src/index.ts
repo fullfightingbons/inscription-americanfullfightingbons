@@ -58,6 +58,76 @@ function redirectTo(pathname: string, requestUrl: URL): Response {
   return Response.redirect(target.toString(), 301);
 }
 
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function secureTokenEquals(left: string, right: string): Promise<boolean> {
+  const [a, b] = await Promise.all([sha256Hex(left || ""), sha256Hex(right || "")]);
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+async function requireAdminStatusToken(request: Request, env: Env): Promise<Response | null> {
+  const expected = String((env as any).INSCRIPTION_ADMIN_STATUS_TOKEN || "").trim();
+  if (!expected) return Response.json({ error: "Endpoint admin non configuré." }, { status: 503 });
+  const auth = request.headers.get("Authorization") || "";
+  const token = auth.replace(/^Bearer\s+/i, "").trim();
+  if (!token || !(await secureTokenEquals(token, expected))) {
+    return Response.json({ error: "Non autorisé" }, { status: 401 });
+  }
+  return null;
+}
+
+async function getAdminInscriptionStatus(request: Request, env: Env): Promise<Response> {
+  const authError = await requireAdminStatusToken(request, env);
+  if (authError) return authError;
+
+  const [totalRow, byStatus, byPayment, byDay] = await Promise.all([
+    env.DB.prepare(`
+      SELECT COUNT(*) AS total,
+             SUM(COALESCE(montant_total, 0)) AS amount_total,
+             MAX(created_at) AS latest_created_at
+      FROM inscriptions_publiques
+    `).first<{ total: number; amount_total: number; latest_created_at: string | null }>(),
+    env.DB.prepare(`
+      SELECT statut, COUNT(*) AS count, SUM(COALESCE(montant_total, 0)) AS amount_total
+      FROM inscriptions_publiques
+      GROUP BY statut
+      ORDER BY count DESC
+    `).all<{ statut: string; count: number; amount_total: number }>(),
+    env.DB.prepare(`
+      SELECT paiement_mode, COUNT(*) AS count
+      FROM inscriptions_publiques
+      GROUP BY paiement_mode
+      ORDER BY count DESC
+    `).all<{ paiement_mode: string; count: number }>(),
+    env.DB.prepare(`
+      SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS count
+      FROM inscriptions_publiques
+      WHERE date(substr(created_at, 1, 10)) >= date('now', '-30 days')
+      GROUP BY day
+      ORDER BY day DESC
+    `).all<{ day: string; count: number }>(),
+  ]);
+
+  return Response.json({
+    ok: true,
+    data: {
+      generated_at: new Date().toISOString(),
+      total: Number(totalRow?.total || 0),
+      amount_total: Number(totalRow?.amount_total || 0),
+      latest_created_at: totalRow?.latest_created_at || null,
+      by_status: byStatus.results || [],
+      by_payment_mode: byPayment.results || [],
+      last_30_days: byDay.results || [],
+    },
+  });
+}
+
 async function routeApi(request: Request, env: Env, pathname: string): Promise<Response> {
   if (request.method === "OPTIONS") return new Response(null, { status: 204 });
 
@@ -69,6 +139,10 @@ async function routeApi(request: Request, env: Env, pathname: string): Promise<R
     return request.method === "HEAD"
       ? new Response(null, { status: 200 })
       : Response.json(body);
+  }
+
+  if (pathname === "/api/admin/inscription/status" && request.method === "GET") {
+    return getAdminInscriptionStatus(request, env);
   }
 
   const context: RouteContext = { request, env };

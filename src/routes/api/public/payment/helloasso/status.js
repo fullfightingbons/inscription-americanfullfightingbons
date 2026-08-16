@@ -360,28 +360,6 @@ async function replaceJournalEntryGroup(db, pieceBase, entries) {
   await insertJournalEntryPair(db, entries);
 }
 
-async function findHelloAssoBankAccountId(db) {
-  const configRows = await db
-  .prepare(
-    `SELECT cle, valeur
-    FROM club_info
-    WHERE cle IN ('helloasso_bank_account_id', 'public_inscription_bank_account_id', 'default_bank_account_id')`,
-  )
-  .all();
-  const preferredId = (configRows?.results || []).map((row) => String(row?.valeur || "").trim()).find(Boolean);
-  if (preferredId) {
-    const preferred = await db
-    .prepare(`SELECT id FROM comptes_bancaires WHERE id = ? LIMIT 1`)
-    .bind(preferredId)
-    .first();
-    if (preferred?.id) return String(preferred.id);
-  }
-  const fallback = await db
-  .prepare(`SELECT id FROM comptes_bancaires ORDER BY created_at ASC, nom ASC LIMIT 1`)
-  .first();
-  return fallback?.id ? String(fallback.id) : null;
-}
-
 async function upsertJournalEntryByPiece(db, entry) {
   const existing = await db
   .prepare(`SELECT id FROM journal_comptable WHERE piece = ? LIMIT 1`)
@@ -443,56 +421,6 @@ async function upsertHelloAssoPaymentJournal(db, registrationId, adherentId, nom
   });
 
   return pieceBase;
-}
-
-async function upsertHelloAssoBankTransaction(db, registrationId, nom, prenom, paidAmount, paidAt, piece) {
-  if (!(paidAmount > 0)) return null;
-  const compteId = await findHelloAssoBankAccountId(db);
-  if (!compteId) return null;
-  const now = new Date().toISOString();
-  const dateOp = String(paidAt || now).slice(0, 10);
-  const sourceDocument = `helloasso:${registrationId}`;
-  const libelle = `Encaissement HelloAsso - ${`${nom} ${prenom}`.trim()}`;
-  const row = {
-    compte_id: compteId,
-    date_op: dateOp,
-    date_valeur: dateOp,
-    libelle,
-    debit: 0,
-    credit: paidAmount,
-    rapproche: 1,
-    ecriture_piece: piece || null,
-    source_document: sourceDocument,
-    source_format: "helloasso",
-    updated_at: now,
-  };
-  const existing = await db
-  .prepare(`SELECT id FROM transactions WHERE source_document = ? LIMIT 1`)
-  .bind(sourceDocument)
-  .first();
-  const columns = Object.keys(row);
-  if (existing?.id) {
-    const assignments = columns.map((column) => `"${column}" = ?`).join(", ");
-    await db
-    .prepare(`UPDATE transactions SET ${assignments} WHERE id = ?`)
-    .bind(...columns.map((column) => row[column]), existing.id)
-    .run();
-    return String(existing.id);
-  }
-  const insertRow = {
-    id: crypto.randomUUID(),
-    ...row,
-    created_at: now,
-  };
-  const insertColumns = Object.keys(insertRow);
-  await db
-  .prepare(
-    `INSERT INTO transactions (${insertColumns.map((column) => `"${column}"`).join(", ")})
-    VALUES (${insertColumns.map(() => "?").join(", ")})`,
-  )
-  .bind(...insertColumns.map((column) => insertRow[column]))
-  .run();
-  return insertRow.id;
 }
 
 async function insertCotisationJournal(db, adherentId, nom, prenom, totals, exercise, paidAt) {
@@ -934,7 +862,7 @@ export async function onRequestGet(context) {
       (registration.exercice_id
       ? await context.env.DB.prepare(`SELECT * FROM exercices WHERE id = ? LIMIT 1`).bind(registration.exercice_id).first()
       : null) || await findActiveExercise(context.env.DB);
-      const paymentPiece = await upsertHelloAssoPaymentJournal(
+      await upsertHelloAssoPaymentJournal(
         context.env.DB,
         registrationId,
         registration.adherent_id,
@@ -943,15 +871,6 @@ export async function onRequestGet(context) {
         paidAmount,
         exercise,
         paidAt,
-      );
-      await upsertHelloAssoBankTransaction(
-        context.env.DB,
-        registrationId,
-        registration.nom,
-        registration.prenom,
-        paidAmount,
-        paidAt,
-        paymentPiece,
       );
       await updateRegistrationPayment(context.env.DB, registrationId, {
         status: paymentSnapshot.status,
@@ -1046,7 +965,7 @@ export async function onRequestGet(context) {
       paidAt,
     );
 
-    const paymentPiece = await upsertHelloAssoPaymentJournal(
+    await upsertHelloAssoPaymentJournal(
       context.env.DB,
       registrationId,
       adherentId,
@@ -1055,15 +974,6 @@ export async function onRequestGet(context) {
       paidAmount,
       exercise,
       paidAt,
-    );
-    await upsertHelloAssoBankTransaction(
-      context.env.DB,
-      registrationId,
-      registration.nom,
-      registration.prenom,
-      paidAmount,
-      paidAt,
-      paymentPiece,
     );
 
     if (factureId) {

@@ -1,10 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   buildInscriptionSaleLines,
   buildVenteTenueJournalCreditLines,
 } from "../src/routes/api/public/payment/helloasso/status.js";
+
+const STATUS_SOURCE = readFileSync(
+  new URL("../src/routes/api/public/payment/helloasso/status.js", import.meta.url),
+  "utf8",
+);
+const INDEX_SOURCE = readFileSync(
+  new URL("../src/index.ts", import.meta.url),
+  "utf8",
+);
 
 const TOTALS = {
   newMemberKit: 40,
@@ -62,4 +72,17 @@ test("buildVenteTenueJournalCreditLines keeps accounting compact by account", ()
     ],
   );
   assert.equal(entries.some((entry) => "pieceBase" in entry), false);
+});
+
+test("HelloAsso status does not create synthetic bank transactions", () => {
+  assert.equal(STATUS_SOURCE.includes("upsertHelloAssoBankTransaction"), false);
+  assert.equal(STATUS_SOURCE.includes("source_format: \"helloasso\""), false);
+  assert.equal(/INSERT\s+INTO\s+transactions/i.test(STATUS_SOURCE), false);
+});
+
+test("admin inscription status is aggregate-only and protected by a dedicated token", () => {
+  assert.match(INDEX_SOURCE, /INSCRIPTION_ADMIN_STATUS_TOKEN/);
+  assert.match(INDEX_SOURCE, /\/api\/admin\/inscription\/status/);
+  assert.match(INDEX_SOURCE, /GROUP BY statut/);
+  assert.doesNotMatch(INDEX_SOURCE, /SELECT \* FROM inscriptions_publiques/);
 });

@@ -87,6 +87,7 @@ Optionnel :
 
 - `PUBLIC_ORIGIN` pour forcer l'origine publique canonique si besoin
 - `HELLOASSO_NOTIFICATION_SIGNATURE_KEY` si vous utilisez une signature webhook HelloAsso
+- `INSCRIPTION_ADMIN_STATUS_TOKEN` pour activer `/api/admin/inscription/status`, une route admin en lecture seule qui renvoie uniquement des agrégats de dossiers
 
 ## URLs publiques
 
@@ -96,3 +97,7 @@ Optionnel :
 - `/api/public/inscription` : soumission du dossier
 - `/api/public/payment/helloasso/status` : vérification du paiement HelloAsso
 - `/api/public/payment/helloasso/notification` : webhook HelloAsso `Order` / `Payment`
+
+## URL admin optionnelle
+
+- `GET /api/admin/inscription/status` : agrégats non nominatifs des dossiers publics, protégé par `Authorization: Bearer $INSCRIPTION_ADMIN_STATUS_TOKEN`. La route renvoie `503` tant que le secret n'est pas configuré.
