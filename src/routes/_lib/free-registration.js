@@ -285,6 +285,7 @@ async function storeRegistrationPdf(env, db, registrationId, payload, totals, ad
       .prepare(`SELECT documents_json FROM inscriptions_publiques WHERE id = ? LIMIT 1`)
       .bind(registrationId)
       .first();
+    pdfPayload.documentsJson = registrationRow?.documents_json || null;
     const photo = await fetchPhotoDocument(env, registrationRow?.documents_json);
     const pdfBytes = await generateAdherentPdf(pdfPayload, photo, env);
     const fileName = `inscription-affbc-${String(registrationId).slice(0, 8)}.pdf`;

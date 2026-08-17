@@ -625,6 +625,7 @@ function buildRegistrationPayload(registration, dossier, adherentId, exercise) {
     clothingOrder: dossier.clothingOrder        || {},
     consents:      dossier.consents             || {},
     legalRepresentative: dossier.legalRepresentative || {},
+    documentsJson: registration.documents_json,
     payment:       pay,
     computedTotals: {
       ...totals,

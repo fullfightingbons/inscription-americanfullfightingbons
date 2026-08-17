@@ -88,6 +88,55 @@ export async function fetchPhotoDocument(env, documentsJson) {
   }
 }
 
+// ─── Pièces jointes (certificat médical, Pass Région, tarif réduit) ──────────
+// Contrairement à la photo d'identité (image JPEG/PNG embarquée telle quelle
+// via addAutoImage, cf. resolvePhotoImage ci-dessus), ces trois documents
+// sont obligatoirement des PDF (cf. uploadRequiredFile(..., preferImage=false)
+// dans src/routes/api/public/inscription.js). Le moteur PDF interne
+// (pdf-engine.js) ne sait construire que ses propres pages à partir de flux
+// de contenu + images JPEG/PNG : il ne sait pas parser/fusionner un PDF
+// externe. Fusionner réellement leurs pages dans ce dossier demanderait un
+// vrai import de PDF (xref, arbre des pages, ressources/polices) — hors
+// de portée de ce fichier. On se contente donc ici de lister les pièces
+// reçues (nom de fichier, taille) pour que leur présence soit tracée dans
+// le dossier PDF ; le fichier lui-même reste consultable depuis la fiche
+// adhérent (gestion, onglet Adhérents — cf. section "Documents & justificatifs").
+const ATTACHED_DOC_LABELS = [
+  ['medicalCertificate', 'Certificat medical'],
+  ['passRegionDocument', 'Justificatif Pass Region'],
+  ['proofDocument',      'Justificatif tarif reduit / CSE'],
+];
+
+function formatFileSize(bytes) {
+  const n = Number(bytes) || 0;
+  if (n <= 0) return '';
+  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} Ko`;
+  return `${(n / (1024 * 1024)).toFixed(1)} Mo`;
+}
+
+/**
+ * @param {string|object} documentsJson  Colonne documents_json (texte JSON ou déjà objet)
+ * @returns {{label: string, name: string, size: string}[]}  Pièces jointes présentes
+ *          (hors photoIdentity, déjà affichée en S1 — cf. resolvePhotoImage)
+ */
+function describeAttachedDocuments(documentsJson) {
+  let docs = {};
+  try {
+    docs = typeof documentsJson === 'string'
+      ? JSON.parse(documentsJson || '{}')
+      : (documentsJson || {});
+  } catch (e) {
+    docs = {};
+  }
+  return ATTACHED_DOC_LABELS
+    .map(([key, label]) => {
+      const ref = docs?.[key];
+      if (!ref?.key) return null; // pièce non fournie (ex. certificat medical si non requis)
+      return { label, name: safe(ref.name) || label, size: formatFileSize(ref.size) };
+    })
+    .filter(Boolean);
+}
+
 // ─── Semantique locale — hors charte de marque ───────────────────────────────
 // ALERT n'est PAS une couleur de marque (celles-ci viennent toutes de
 // document-template.js) : c'est un rouge d'alerte, utilisé uniquement pour
@@ -185,8 +234,9 @@ export async function generateAdherentPdf(registration, photo = null, env = null
   const season       = safe(registration.seasonLabel) || currentSeasonLabel();
 
   const p = new PdfBuilder();
-  const photoImage = await resolvePhotoImage(p, photo);
-  const logoImage  = await resolveLogoImage(p, env);
+  const photoImage  = await resolvePhotoImage(p, photo);
+  const logoImage   = await resolveLogoImage(p, env);
+  const attachedDocs = describeAttachedDocuments(registration.documentsJson ?? registration.documents_json);
 
   // ── Curseur vertical courant (mm depuis le haut de la page courante) ────────
   let y = 0;
@@ -617,6 +667,38 @@ export async function generateAdherentPdf(registration, photo = null, env = null
   p.text('Verifie par : _______________________  .  N deg. adherent : ___________  .  Licence FFK emise le : ___________  .  Visa : _______',
          ML/MM + 2, y + 8, { color: MUTED });
   y += 13;
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // S7 — PIÈCES JOINTES (documents fournis à l'inscription, conservés à part)
+  // ══════════════════════════════════════════════════════════════════════════════
+  // N'apparaît que si au moins un document (hors photo d'identité, déjà en S1)
+  // a été fourni — cf. describeAttachedDocuments ci-dessus pour le pourquoi
+  // du "listing" plutôt qu'une fusion réelle des PDF.
+  if (attachedDocs.length > 0) {
+    section(7, 'Pieces jointes fournies a l\'inscription');
+    p.setFont('F1', 5.2);
+    p.text("Documents conserves separement (stockage securise du club), non fusionnes dans ce PDF.",
+           ML/MM, y, { color: MUTED });
+    y += 4;
+    p.text("Consultables depuis la fiche adherent - onglet Adherents de l'espace gestion.",
+           ML/MM, y, { color: MUTED });
+    y += 6;
+
+    attachedDocs.forEach((doc) => {
+      ensureSpace(9);
+      p.setFillRgb(WHITE);
+      p.setStrokeRgb(LINE);
+      p.setLineWidth(0.2);
+      p.roundedRect(ML/MM, y, CW/MM, 7.5, 1.2, 'B');
+      p.setFont('F2', 6.2);
+      p.text(doc.label, ML/MM + 3, y + 5, { color: INK });
+      p.setFont('F1', 5.6);
+      const detail = doc.size ? `${doc.name} - ${doc.size}` : doc.name;
+      p.text(detail, ML/MM + 75, y + 5, { color: MUTED });
+      y += 9;
+    });
+    y += 3;
+  }
 
   // ══════════════════════════════════════════════════════════════════════════════
   // PIED DE PAGE sur toutes les pages — partagé avec boutique/gestion
