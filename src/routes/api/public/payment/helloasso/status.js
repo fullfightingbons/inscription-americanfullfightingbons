@@ -21,7 +21,7 @@ import {
   parseDossierJson,
   updateRegistrationPayment,
 } from "../../../../_lib/public-payments.js";
-import { generateAdherentPdf, fetchPhotoDocument } from "../../../../_lib/pdf.js";
+import { generateAdherentPdfWithAttachments, fetchPhotoDocument } from "../../../../_lib/pdf.js";
 import { isMinor, toBool, findActiveExercise, seasonLabelFromExercise } from "../../../../_lib/helpers.js";
 import {
   buildAdditionalOrderSyncItems,
@@ -664,7 +664,7 @@ async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId,
   // Génération PDF via le nouveau générateur mis en page
   const payload = buildRegistrationPayload(registration, dossier, adherentId, exercise);
   const photo = await fetchPhotoDocument(env, registration.documents_json);
-  const pdfBytes = await generateAdherentPdf(payload, photo, env);
+  const pdfBytes = await generateAdherentPdfWithAttachments(payload, photo, env);
   const pdfContent = uint8ToBase64(pdfBytes);
   const fileName = `inscription-affbc-${String(registration.id || "").slice(0, 8)}.pdf`;
 
@@ -723,7 +723,7 @@ async function storeRegistrationPdf(env, registration, dossier, adherentId, exer
   try {
     const payload  = buildRegistrationPayload(registration, dossier, adherentId, exercise);
     const photo    = await fetchPhotoDocument(env, registration.documents_json);
-    const pdfBytes = await generateAdherentPdf(payload, photo, env);      // Uint8Array directement
+    const pdfBytes = await generateAdherentPdfWithAttachments(payload, photo, env);      // Uint8Array directement
     const fileName = `inscription-affbc-${String(registration.id || '').slice(0, 8)}.pdf`;
     const r2Key    = `adherents/${adherentId}/inscription-${String(registration.id).slice(0, 8)}.pdf`;
 

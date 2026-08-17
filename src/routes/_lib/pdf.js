@@ -49,6 +49,7 @@
 
 import { currentSeasonLabel } from './helpers.js';
 import { addAutoImage, addPngImage, safe, PdfBuilder, buildPdfDocument, measureTextWidth, ML, MM, CW } from './pdf-engine.js';
+import { mergeAttachedPdfs } from './pdf-merge.js';
 import {
   drawHeader, drawFooter,
   NOIR, INK, MUTED, LINE, WHITE, GREEN, DORE, DORE_CLAIR, DORE_BG,
@@ -135,6 +136,72 @@ function describeAttachedDocuments(documentsJson) {
       return { label, name: safe(ref.name) || label, size: formatFileSize(ref.size) };
     })
     .filter(Boolean);
+}
+
+/**
+ * Va chercher, en plus de la photo d'identité (cf. fetchPhotoDocument), les
+ * bytes bruts des 3 documents PDF fournis à l'inscription (certificat
+ * médical, justificatif Pass Région, justificatif tarif réduit), pour
+ * fusion réelle via mergeAttachedPdfs() — cf. pdf-merge.js pour le pourquoi
+ * de cette séparation.
+ *
+ * @param {object} env
+ * @param {string|object} documentsJson
+ * @returns {Promise<{key: string, label: string, name: string, bytes: Uint8Array}[]>}
+ */
+export async function fetchAttachedDocuments(env, documentsJson) {
+  let docs = {};
+  try {
+    docs = typeof documentsJson === 'string'
+      ? JSON.parse(documentsJson || '{}')
+      : (documentsJson || {});
+  } catch (e) {
+    docs = {};
+  }
+
+  const results = [];
+  for (const [key, label] of ATTACHED_DOC_LABELS) {
+    const ref = docs?.[key];
+    if (!ref?.bucket || !ref?.key) continue; // piece non fournie (ex. certificat non requis)
+    try {
+      const bucket = ref.bucket === 'fullfighting-pdf' ? env?.R2_PDF : env?.R2_STORAGE;
+      if (!bucket) continue;
+      const object = await bucket.get(ref.key);
+      if (!object) continue;
+      const bytes = new Uint8Array(await object.arrayBuffer());
+      results.push({ key, label, name: ref.name || label, bytes });
+    } catch (e) {
+      // Une piece illisible ne doit pas empecher la recuperation des autres.
+      console.error(`[pdf] fetchAttachedDocuments: echec lecture "${label}":`, e?.message ?? String(e));
+    }
+  }
+  return results;
+}
+
+/**
+ * Point d'entrée recommandé pour générer le dossier complet : dossier de
+ * synthèse (generateAdherentPdf, inchangé) + fusion réelle des pièces PDF
+ * jointes en pages annexées (mergeAttachedPdfs, cf. pdf-merge.js).
+ *
+ * Ne lève jamais d'exception : toute erreur de récupération/fusion des
+ * pièces retombe sur le dossier de base seul (comportement historique).
+ *
+ * @param {object} registration
+ * @param {{bytes: Uint8Array, contentType: string}|null} [photo]
+ * @param {object|null} [env]
+ * @returns {Promise<Uint8Array>}
+ */
+export async function generateAdherentPdfWithAttachments(registration, photo = null, env = null) {
+  const dossierBytes = await generateAdherentPdf(registration, photo, env);
+  try {
+    const documentsJson = registration?.documentsJson ?? registration?.documents_json;
+    const attachments = await fetchAttachedDocuments(env, documentsJson);
+    if (!attachments.length) return dossierBytes;
+    return await mergeAttachedPdfs(dossierBytes, attachments);
+  } catch (e) {
+    console.error('[pdf] generateAdherentPdfWithAttachments: fusion des pieces jointes echouee, dossier de base renvoye:', e?.message ?? String(e));
+    return dossierBytes;
+  }
 }
 
 // ─── Semantique locale — hors charte de marque ───────────────────────────────
@@ -677,10 +744,10 @@ export async function generateAdherentPdf(registration, photo = null, env = null
   if (attachedDocs.length > 0) {
     section(7, 'Pieces jointes fournies a l\'inscription');
     p.setFont('F1', 5.2);
-    p.text("Documents conserves separement (stockage securise du club), non fusionnes dans ce PDF.",
+    p.text("Documents fournis a l'inscription, annexes en pages supplementaires a la suite de ce dossier.",
            ML/MM, y, { color: MUTED });
     y += 4;
-    p.text("Consultables depuis la fiche adherent - onglet Adherents de l'espace gestion.",
+    p.text("En cas d'indisponibilite, consultables depuis la fiche adherent - onglet Adherents de l'espace gestion.",
            ML/MM, y, { color: MUTED });
     y += 6;
 

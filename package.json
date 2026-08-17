@@ -15,6 +15,9 @@
 		"preview_image_url": "https://imagedelivery.net/wSMYJvS3Xw-n339CbDyDIA/aa6158f1-7711-4485-f134-a8c802c0a800/preview",
 		"publish": true
 	},
+	"dependencies": {
+		"pdf-lib": "^1.17.1"
+	},
 	"devDependencies": {
 		"typescript": "5.9.3",
 		"wrangler": "4.97.0"
