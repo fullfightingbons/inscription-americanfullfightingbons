@@ -734,6 +734,22 @@ a{color:inherit}
   opacity:.7;
   letter-spacing:.02em;
 }
+.partner-banner-required-hint{
+  margin:6px 0 0;
+  font-size:12px;
+  font-weight:600;
+  color:var(--red);
+}
+.partner-banner-status{
+  font-size:11px;
+  font-weight:700;
+  color:var(--green);
+  text-align:center;
+  letter-spacing:.02em;
+}
+.partner-banner.is-confirmed{
+  border-color:rgba(31,107,71,.35);
+}
 @media (max-width:760px){
   .partner-banner{flex-wrap:wrap}
   .partner-banner-action{align-self:stretch;width:100%;margin-left:0}

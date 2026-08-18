@@ -200,6 +200,7 @@ function applyDraft(data) {
       if (sizeEl && item.size) sizeEl.value = item.size;
     });
   }
+  if (data.decathlonLinkOpened) markDecathlonLinkOpened();
   // Engagements
   set('rulesAccepted', data.rulesAccepted); set('insuranceAcknowledged', data.insuranceAcknowledged);
   set('imageRights', data.imageRights);
@@ -350,6 +351,7 @@ function collectAllFields() {
     qsSport: collectQs(),
     ...collectClothing(),
     extraOrderItems: collectExtraOrderItems(),
+    decathlonLinkOpened,
     rulesAccepted: checked('rulesAccepted'), insuranceAcknowledged: checked('insuranceAcknowledged'),
     imageRights: val('imageRights'),
     consentSignedAt: val('consentSignedAt'), applicantSignatureName: val('applicantSignatureName'),
@@ -753,6 +755,7 @@ function validateStep(step) {
             : `Stock insuffisant pour ${product.name}.`;
         }
       }
+      if (!decathlonLinkOpened) return 'Merci de cliquer sur « Créer mon compte Decathlon » ci-dessus avant de continuer.';
       return null;
     }
     case 6: { // Engagements
@@ -978,6 +981,30 @@ function updateClothingSubtotals(totals = calculateTotals()) {
       const el = document.querySelector(`[data-order-subtotal="${product.id}"]`);
       if (el) el.textContent = '0.00 €';
     });
+}
+
+// ─── Bannière partenaire Decathlon (étape Commandes) ──────────────────────────
+// Rendre le clic obligatoire avant de valider l'étape (validateStep, case 5)
+// sans ralentir l'inscription : on se contente de constater le clic sur le lien
+// partenaire (ouverture immédiate d'un nouvel onglet), sans attendre ni essayer
+// de vérifier la création réelle du compte côté Decathlon — impossible à
+// constater depuis ce domaine (lien cross-origin). Le drapeau est inclus dans
+// le brouillon (saveDraft / applyDraft) pour ne pas redemander le clic si la
+// page est rechargée ou le brouillon restauré plus tard.
+let decathlonLinkOpened = false;
+
+function markDecathlonLinkOpened() {
+  if (decathlonLinkOpened) return;
+  decathlonLinkOpened = true;
+  const banner = g('partnerBanner');
+  const status = g('decathlonCtaStatus');
+  if (banner) banner.classList.add('is-confirmed');
+  if (status) status.hidden = false;
+}
+
+function initDecathlonPartnerBanner() {
+  const cta = g('decathlonCta');
+  if (cta) cta.addEventListener('click', markDecathlonLinkOpened);
 }
 
 // ─── Config du club ───────────────────────────────────────────────────────────
@@ -1446,6 +1473,7 @@ async function init() {
   // 3. Rendre le QS et les commandes
   renderQsGrid();
   renderClothingOrder();
+  initDecathlonPartnerBanner();
 
   // 4. Préremplissage depuis l'espace membre (lien "Renouveler mon
   // adhésion"), sinon recharger le brouillon local.
