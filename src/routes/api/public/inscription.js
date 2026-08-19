@@ -256,9 +256,51 @@ async function loadOrderProductsFromDb(db, env) {
   }
 }
 
+// ─── Cohérence des dates ────────────────────────────────────────────────────
+// Miroir des vérifications faites côté client dans public/assets/inscription.js
+// (computeDateFieldErrors) — dupliqué ici car le Worker et le script du
+// navigateur ne partagent pas de module commun, et le serveur ne doit jamais
+// faire confiance à la validation du client (même principe que pour
+// calculateTotals/tshirtQty ailleurs dans ce fichier).
+
+function todayIso() {
+  // Recalculée à chaque appel plutôt que mise en cache au chargement du
+  // module : le Worker reste actif entre plusieurs requêtes, une valeur figée
+  // au démarrage dériverait au fil des jours.
+  return new Date().toISOString().slice(0, 10);
+}
+
+// Isolée de assertSignatureDatesCoherence et appelée avant le calcul de
+// isMinor()/les champs du représentant légal : une date de naissance dans le
+// futur donne un âge négatif qui satisfait `age < 18`, ce qui ferait passer
+// isMinor() à true et réclamerait à tort les champs du représentant légal au
+// lieu de signaler le vrai problème (la date de naissance elle-même).
+function assertBirthDateCoherence(birthDate) {
+  const today = todayIso();
+  if (birthDate > today) throw new Error("La date de naissance ne peut pas être dans le futur");
+  if (birthDate < "1920-01-01") throw new Error("La date de naissance semble incorrecte");
+}
+
+function assertSignatureDatesCoherence({ birthDate, legalSignedAt, consentSignedAt }) {
+  const today = todayIso();
+
+  if (legalSignedAt) {
+    if (legalSignedAt > today) throw new Error("La date de l'autorisation parentale ne peut pas être dans le futur");
+    if (legalSignedAt < birthDate) throw new Error("La date de l'autorisation parentale ne peut pas être antérieure à la date de naissance");
+  }
+
+  if (consentSignedAt) {
+    if (consentSignedAt > today) throw new Error("La date de signature ne peut pas être dans le futur");
+    if (consentSignedAt < birthDate) throw new Error("La date de signature ne peut pas être antérieure à la date de naissance");
+    if (legalSignedAt && consentSignedAt < legalSignedAt) {
+      throw new Error("La date de signature ne peut pas être antérieure à la date de l'autorisation parentale");
+    }
+  }
+}
+
 // ─── Validation du payload ────────────────────────────────────────────────────
 
-function validatePayload(payload) {
+export function validatePayload(payload) {
   const identity = payload?.identity || {};
   const contact  = payload?.contact  || {};
   const emergency = payload?.emergency || {};
@@ -269,6 +311,7 @@ function validatePayload(payload) {
   const payment   = payload?.payment   || {};
 
   const birthDate = requireDate(identity.birthDate, "Date de naissance");
+  assertBirthDateCoherence(birthDate);
   const minor     = isMinor(birthDate);
 
   requireText(identity.lastName,  "Nom");
@@ -294,13 +337,14 @@ function validatePayload(payload) {
   if (payment.payerFirstName) requireText(payment.payerFirstName, "Prénom du payeur");
   if (payment.payerLastName)  requireText(payment.payerLastName,  "Nom du payeur");
 
+  let legalSignedAt = null;
   if (minor) {
     requireText(legalRep.lastName,       "Nom du représentant légal");
     requireText(legalRep.firstName,      "Prénom du représentant légal");
     requireText(legalRep.role,           "Qualité du représentant légal");
     requireText(legalRep.signatureName,  "Signature du représentant légal");
     requireText(legalRep.city,           "Ville de l'autorisation parentale");
-    requireDate(legalRep.signedAt,       "Date de l'autorisation parentale");
+    legalSignedAt = requireDate(legalRep.signedAt, "Date de l'autorisation parentale");
   }
 
   for (const key of REQUIRED_QS_KEYS) {
@@ -312,7 +356,8 @@ function validatePayload(payload) {
   if (!toBool(consents.rulesAccepted)) throw new Error("L'acceptation du règlement intérieur est obligatoire");
   if (consents.imageRights !== "yes" && consents.imageRights !== "no") throw new Error("Le choix du droit à l'image est obligatoire");
   requireText(consents.applicantSignatureName,"Signature du pratiquant");
-  requireDate(consents.signedAt, "Date de signature");
+  const consentSignedAt = requireDate(consents.signedAt, "Date de signature");
+  assertSignatureDatesCoherence({ birthDate, legalSignedAt, consentSignedAt });
 
   if (practice.passRegionEnabled && !/^\d{4}$/.test(String(practice.passRegionCode || "").trim())) {
     throw new Error("Le code Pass Région doit contenir 4 chiffres");

@@ -608,6 +608,14 @@ a{color:inherit}
 }
 .field small{color:var(--muted);font-size:12px}
 .field-full{grid-column:1 / -1}
+.field.field-invalid input{
+  border-color:var(--red-dark);
+  background:rgba(159,36,19,.05);
+}
+.field-error-text{
+  color:var(--red-dark);
+  font-weight:600;
+}
 .check-field{
   grid-template-columns:auto 1fr;
   align-items:start;

@@ -205,7 +205,7 @@
               <label class="field">
                 <span>Date de naissance</span>
                 <input id="birthDate" type="date" min="1920-01-01" required>
-                <small>La date doit être dans le passé</small>
+                <small id="birthDate-hint">La date doit être dans le passé</small>
               </label>
               <label class="field">
                 <span>Lieu de naissance</span>
@@ -394,6 +394,7 @@
                 <label class="field">
                   <span>Date de signature</span>
                   <input id="legalSignedAt" type="date">
+                  <small id="legalSignedAt-hint" class="field-hint"></small>
                 </label>
                 <label class="field">
                   <span>Nom tapé pour signature</span>
@@ -598,6 +599,7 @@
               <label class="field">
                 <span>Date de signature</span>
                 <input id="consentSignedAt" type="date" required>
+                <small id="consentSignedAt-hint" class="field-hint"></small>
               </label>
               <label class="field" id="applicant-signature-field">
                 <span>Nom tapé pour signature du pratiquant</span>

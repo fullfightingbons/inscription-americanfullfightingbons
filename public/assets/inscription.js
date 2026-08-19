@@ -213,6 +213,7 @@ function applyDraft(data) {
   // Mise à jour des affichages conditionnels
   updateConditionals();
   updateSummary();
+  updateDateFieldErrors();
 }
 
 // ─── Collecte des champs ──────────────────────────────────────────────────────
@@ -360,6 +361,95 @@ function collectAllFields() {
     payerLastName: val('payerLastName'),
     installmentCount: getInstallmentCount(),
   };
+}
+
+// ─── Cohérence des dates ────────────────────────────────────────────────────
+// Détecte les incohérences de saisie (date de naissance dans le futur, date de
+// naissance improbable, signatures antidatées ou postérieures à leur ordre
+// logique...) pour un retour immédiat sous le champ concerné pendant la
+// saisie. Miroir des vérifications faites côté serveur dans validatePayload()
+// (assertBirthDateCoherence / assertSignatureDatesCoherence côté Worker,
+// src/routes/api/public/inscription.js) — dupliqué ici faute de module
+// partagé entre ce script classique et le Worker (mêmes limites que isMinor()
+// ci-dessous, déjà dupliqué pour la même raison).
+
+function todayISO() {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
+function computeDateFieldErrors() {
+  const today = todayISO();
+  const birthDate = val('birthDate');
+  const legalSignedAt = val('legalSignedAt');
+  const consentSignedAt = val('consentSignedAt');
+  const errors = {};
+
+  if (birthDate) {
+    if (birthDate > today) errors.birthDate = 'La date de naissance ne peut pas être dans le futur.';
+    else if (birthDate < '1920-01-01') errors.birthDate = 'La date de naissance semble incorrecte.';
+  }
+
+  if (legalSignedAt) {
+    if (legalSignedAt > today) errors.legalSignedAt = 'La date de signature ne peut pas être dans le futur.';
+    else if (birthDate && legalSignedAt < birthDate) errors.legalSignedAt = 'La date de signature ne peut pas être antérieure à la date de naissance.';
+  }
+
+  if (consentSignedAt) {
+    if (consentSignedAt > today) errors.consentSignedAt = 'La date de signature ne peut pas être dans le futur.';
+    else if (birthDate && consentSignedAt < birthDate) errors.consentSignedAt = 'La date de signature ne peut pas être antérieure à la date de naissance.';
+    else if (legalSignedAt && consentSignedAt < legalSignedAt) errors.consentSignedAt = 'La date de signature ne peut pas être antérieure à la date de l\'autorisation parentale.';
+  }
+
+  return errors;
+}
+
+// Affiche/efface le message d'erreur d'un champ, en conservant le texte
+// d'origine du <small> (indice statique ou vide) pour le restaurer une fois
+// l'erreur corrigée.
+function setFieldError(inputId, message) {
+  const input = g(inputId);
+  if (!input) return;
+  const wrapper = input.closest('.field');
+  const hint = g(inputId + '-hint');
+  if (message) {
+    if (wrapper) wrapper.classList.add('field-invalid');
+    input.setAttribute('aria-invalid', 'true');
+    if (hint) {
+      if (hint.dataset.defaultText === undefined) hint.dataset.defaultText = hint.textContent;
+      hint.textContent = message;
+      hint.classList.add('field-error-text');
+    }
+  } else {
+    if (wrapper) wrapper.classList.remove('field-invalid');
+    input.removeAttribute('aria-invalid');
+    if (hint) {
+      hint.classList.remove('field-error-text');
+      hint.textContent = hint.dataset.defaultText || '';
+    }
+  }
+}
+
+function updateDateFieldErrors() {
+  const errors = computeDateFieldErrors();
+  setFieldError('birthDate', errors.birthDate || null);
+  setFieldError('legalSignedAt', errors.legalSignedAt || null);
+  setFieldError('consentSignedAt', errors.consentSignedAt || null);
+}
+
+// Empêche déjà la sélection d'une date future via le sélecteur natif (en plus
+// du contrôle JS ci-dessus, qui reste nécessaire pour une saisie manuelle au
+// clavier selon les navigateurs).
+function applyDateBounds() {
+  const today = todayISO();
+  const birthDateEl = g('birthDate');
+  if (birthDateEl) birthDateEl.max = today;
+  const legalEl = g('legalSignedAt');
+  if (legalEl) legalEl.max = today;
+  const consentEl = g('consentSignedAt');
+  if (consentEl) consentEl.max = today;
 }
 
 // ─── Calcul du total ──────────────────────────────────────────────────────────
@@ -669,6 +759,8 @@ function validateStep(step) {
       if (!val('lastName')) return 'Le nom est obligatoire.';
       if (!val('firstName')) return 'Le prénom est obligatoire.';
       if (!val('birthDate')) return 'La date de naissance est obligatoire.';
+      const birthDateError = computeDateFieldErrors().birthDate;
+      if (birthDateError) return birthDateError;
       if (!val('birthPlace')) return 'Le lieu de naissance est obligatoire.';
       const photo = g('photoIdentity');
       if (!photo || !photo.files?.length) return 'La photo d\'identité est obligatoire.';
@@ -711,6 +803,8 @@ function validateStep(step) {
         if (!val('legalRole')) return 'La qualité du représentant légal est obligatoire.';
         if (!val('legalCity')) return 'La ville de signature est obligatoire.';
         if (!val('legalSignedAt')) return 'La date de signature est obligatoire.';
+        const legalSignedAtError = computeDateFieldErrors().legalSignedAt;
+        if (legalSignedAtError) return legalSignedAtError;
         if (!val('legalSignatureName')) return 'La signature du représentant légal est obligatoire.';
       }
       return null;
@@ -763,6 +857,8 @@ function validateStep(step) {
       if (!checked('insuranceAcknowledged')) return 'Vous devez reconnaître avoir pris connaissance des modalités d\'assurance.';
       if (!val('imageRights')) return 'Veuillez faire votre choix concernant le droit à l\'image.';
       if (!val('consentSignedAt')) return 'La date de signature est obligatoire.';
+      const consentSignedAtError = computeDateFieldErrors().consentSignedAt;
+      if (consentSignedAtError) return consentSignedAtError;
       if (isMinor(val('birthDate'))) {
         if (!val('legalConsentSignatureName')) return 'La signature du représentant légal (droit à l\'image) est obligatoire pour un mineur.';
       } else {
@@ -1474,6 +1570,7 @@ async function init() {
   renderQsGrid();
   renderClothingOrder();
   initDecathlonPartnerBanner();
+  applyDateBounds();
 
   // 4. Préremplissage depuis l'espace membre (lien "Renouveler mon
   // adhésion"), sinon recharger le brouillon local.
@@ -1531,8 +1628,8 @@ async function init() {
   });
 
   // 7. Sauvegarde du brouillon à chaque modification
-  document.addEventListener('input', () => { updateConditionals(); updateSummary(); });
-  document.addEventListener('change', () => { updateConditionals(); updateSummary(); });
+  document.addEventListener('input', () => { updateConditionals(); updateSummary(); updateDateFieldErrors(); });
+  document.addEventListener('change', () => { updateConditionals(); updateSummary(); updateDateFieldErrors(); });
   document.addEventListener('input', scheduleBureauEligibilityRefresh);
   document.addEventListener('change', scheduleBureauEligibilityRefresh);
 
@@ -1555,6 +1652,7 @@ async function init() {
   updateConditionals();
   await refreshBureauEligibility();
   updateSummary();
+  updateDateFieldErrors();
 }
 
 document.addEventListener('DOMContentLoaded', init);
