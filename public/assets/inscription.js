@@ -610,6 +610,19 @@ function updateConditionals() {
   const minor = isMinor(val('birthDate'));
   show('minor-block', minor);
 
+  // Signature du consentement "droit à l'image" (étape Engagements) : le
+  // pratiquant signe lui-même, sauf s'il est mineur, où c'est le représentant
+  // légal qui signe. Rejoué ici (donc après restauration de brouillon,
+  // préremplissage espace membre, ou toute saisie) pour rester synchronisé
+  // avec la vraie valeur de birthDate, plutôt que de dépendre d'un event
+  // 'change' qui ne se déclenche pas lors d'une écriture programmatique.
+  show('applicant-signature-field', !minor);
+  show('legal-consent-signature-field', minor);
+  const applicantSignatureInput = g('applicantSignatureName');
+  const legalConsentSignatureInput = g('legalConsentSignatureName');
+  if (applicantSignatureInput) applicantSignatureInput.toggleAttribute('required', !minor);
+  if (legalConsentSignatureInput) legalConsentSignatureInput.toggleAttribute('required', minor);
+
   const passRegion = val('passRegionEnabled') === 'true';
   document.querySelectorAll('[data-show-when="passRegion"]').forEach(el => el.hidden = !passRegion);
   document.querySelectorAll('[data-show-when="noPassRegion"]').forEach(el => el.hidden = passRegion);
