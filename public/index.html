@@ -686,43 +686,5 @@
     <a href="/mentions-legales" style="color:var(--muted);text-decoration:underline">Mentions légales &amp; politique de confidentialité</a>
   </footer>
   <script src="/assets/inscription.js" defer></script>
-  <script>
-    // Droit à l'image mineur : affiche le champ signature représentant légal
-    // quand la date de naissance indique un mineur (<18 ans)
-    function updateConsentSignatureFields() {
-      var birthDate = document.getElementById('birthDate');
-      var applicantField = document.getElementById('applicant-signature-field');
-      var legalField = document.getElementById('legal-consent-signature-field');
-      var legalInput = document.getElementById('legalConsentSignatureName');
-      var applicantInput = document.getElementById('applicantSignatureName');
-      if (!birthDate || !applicantField || !legalField) return;
-      var isMinor = false;
-      if (birthDate.value) {
-        var birth = new Date(birthDate.value + 'T00:00:00');
-        var now = new Date();
-        var age = now.getFullYear() - birth.getFullYear()
-          - ((now.getMonth() < birth.getMonth() || (now.getMonth() === birth.getMonth() && now.getDate() < birth.getDate())) ? 1 : 0);
-        isMinor = age < 18;
-      }
-      if (isMinor) {
-        applicantField.hidden = true;
-        applicantInput.removeAttribute('required');
-        legalField.hidden = false;
-        legalInput.setAttribute('required', '');
-      } else {
-        applicantField.hidden = false;
-        applicantInput.setAttribute('required', '');
-        legalField.hidden = true;
-        legalInput.removeAttribute('required');
-      }
-    }
-    document.addEventListener('DOMContentLoaded', function() {
-      var birthDate = document.getElementById('birthDate');
-      if (birthDate) {
-        birthDate.addEventListener('change', updateConsentSignatureFields);
-        updateConsentSignatureFields();
-      }
-    });
-  </script>
 </body>
 </html>
