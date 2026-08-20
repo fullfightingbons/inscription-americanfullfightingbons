@@ -22,7 +22,7 @@ import {
   updateRegistrationPayment,
 } from "../../../../_lib/public-payments.js";
 import { generateAdherentPdfWithAttachments, fetchPhotoDocument } from "../../../../_lib/pdf.js";
-import { isMinor, toBool, findActiveExercise, seasonLabelFromExercise } from "../../../../_lib/helpers.js";
+import { isMinor, toBool, findActiveExercise, seasonLabelFromExercise, disciplineFromFormula } from "../../../../_lib/helpers.js";
 import {
   buildAdditionalOrderSyncItems,
   buildClothingSyncItems,
@@ -190,7 +190,7 @@ async function upsertAdherent(db, payload, totals, exercise) {
     adresse: [contact.address1 || "", contact.address2 || ""].filter(Boolean).join(", "),
     code_postal: String(contact.postalCode || "").trim(),
     ville: String(contact.city || "").trim(),
-    discipline: existing?.discipline || (String(practice.formulaCode || "") === "bureau" ? "Membre du Bureau" : "Club"),
+    discipline: existing?.discipline || disciplineFromFormula(practice.formulaCode),
     droit_image: (payload.consents?.imageRights === "yes") ? 1 : 0,
     certificat: totals.certificateRequired ? 0 : 1,
     pass_region: practice.passRegionEnabled ? 1 : 0,

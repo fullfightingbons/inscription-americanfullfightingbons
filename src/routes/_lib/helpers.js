@@ -183,6 +183,29 @@ export function calculateTotals(practice, pricing, clothing = {}, extraOrderItem
   };
 }
 
+/**
+ * Type d'adhésion (colonne `discipline` de `adherents`, valeurs attendues
+ * par ADH_TYPES côté logiciel de gestion : 'Club' | 'CSE Thalès' |
+ * 'Membre du Bureau') déduit de la formule tarifaire choisie à
+ * l'inscription. Seules 'bureau' et 'cse_thales' ont un type dédié — toute
+ * autre formule (base/family/pro, et toute formule future pas encore
+ * ajoutée ici) reste 'Club', le type générique par défaut.
+ *
+ * Centralisé ici (plutôt que dupliqué en ternaire dans chaque appelant)
+ * après le bug du 20/08/2026 : status.js ne reconnaissait que 'bureau' et
+ * renvoyait 'Club' pour 'cse_thales', alors que ADH_TYPES prévoit bien un
+ * type "CSE Thalès" dédié — les adhérents inscrits avec ce tarif étaient
+ * donc classés "Club" côté gestion (cf. scripts/fix_cse_thales_discipline.sql
+ * pour corriger les fiches déjà créées avant ce correctif).
+ */
+const FORMULA_DISCIPLINE_MAP = {
+  bureau:     "Membre du Bureau",
+  cse_thales: "CSE Thalès",
+};
+export function disciplineFromFormula(formulaCode) {
+  return FORMULA_DISCIPLINE_MAP[String(formulaCode || "")] || "Club";
+}
+
 export function toBool(value) {
   return (
     value === true ||
