@@ -355,7 +355,14 @@ export function validatePayload(payload) {
 
   if (!toBool(consents.rulesAccepted)) throw new Error("L'acceptation du règlement intérieur est obligatoire");
   if (consents.imageRights !== "yes" && consents.imageRights !== "no") throw new Error("Le choix du droit à l'image est obligatoire");
-  requireText(consents.applicantSignatureName,"Signature du pratiquant");
+  // Comme côté client (inscription.js, case 6 de validateStep) : le pratiquant
+  // signe lui-même le consentement "droit à l'image", sauf s'il est mineur, où
+  // c'est le représentant légal qui signe (champ legalConsentSignatureName).
+  if (minor) {
+    requireText(consents.legalConsentSignatureName, "Signature du représentant légal (droit à l'image)");
+  } else {
+    requireText(consents.applicantSignatureName, "Signature du pratiquant");
+  }
   const consentSignedAt = requireDate(consents.signedAt, "Date de signature");
   assertSignatureDatesCoherence({ birthDate, legalSignedAt, consentSignedAt });
 
