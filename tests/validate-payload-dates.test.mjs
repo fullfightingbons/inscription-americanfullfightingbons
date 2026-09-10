@@ -94,6 +94,14 @@ function buildMinorPayload(overrides = {}) {
       signedAt: isoDate(0),
       ...overrides.legalRepresentative,
     },
+    // Pour un mineur, c'est le representant legal qui signe le consentement
+    // "droit a l'image" (legalConsentSignatureName), pas le pratiquant
+    // (applicantSignatureName, seul champ que buildPayload renseigne par
+    // defaut) : cf. le bloc if (minor) de validatePayload, inscription.js.
+    consents: {
+      legalConsentSignatureName: "Marie Dupont",
+      ...overrides.consents,
+    },
   });
 }
 
