@@ -532,7 +532,7 @@ export async function generateAdherentPdf(registration, photo = null, env = null
   p.text(`${total.toFixed(2)} EUR`, 210 - ML/MM - 4, y + 7.5, { color: INK, align: 'right' });
   p.setFont('F1', 5.8);
   p.text(
-      `Cotis. ${cotisation.toFixed(2)} + Kit ${Number(totals.newMemberKit || 0).toFixed(2)} + Commandes ${(clothingTotal + extraProductsTotal).toFixed(2)}`,
+      `Cotis. ${cotisation.toFixed(2)} + Commandes ${(clothingTotal + extraProductsTotal).toFixed(2)}`,
       210 - ML/MM - 4, y + 12, { color: MUTED, align: 'right' },
   );
   y += 18;

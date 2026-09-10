@@ -69,13 +69,17 @@ test("calculateTotals computes clothing totals for a new member using server-sid
     PRICING,
     {},
   );
-  // Nouvel adhérent : t-shirt + pantalon par défaut (quantité 1 chacun),
-  // plus le supplément "tenue nouvel adhérent" (newMemberKit) qui s'ajoute
-  // toujours au total tel que défini par la tarification du club.
+  // Nouvel adhérent : t-shirt + pantalon par défaut (quantité 1 chacun).
+  // Le supplément "tenue nouvel adhérent" (newMemberKit) n'est PLUS ajouté
+  // au total (correctif du 10/09/2026) : il faisait double emploi avec
+  // clothingTotal, qui porte déjà entièrement le coût de la tenue, et le
+  // formulaire public n'a jamais inclus ce supplément dans le montant
+  // affiché/facturé au pratiquant.
   assert.equal(totals.tshirtQty, 1);
   assert.equal(totals.pantalonQty, 1);
   assert.equal(totals.clothingTotal, 25 + 15);
-  assert.equal(totals.total, 250 + PRICING.newMemberKit + 25 + 15);
+  assert.equal(totals.newMemberKit, undefined);
+  assert.equal(totals.total, 250 + 25 + 15);
 });
 
 test("calculateTotals throws on an unknown formulaCode", () => {

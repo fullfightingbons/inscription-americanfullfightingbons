@@ -124,11 +124,25 @@ export function calculateTotals(practice, pricing, clothing = {}, extraOrderItem
     pantalonQty = Math.max(1, pantalonQty);
   }
 
-  // Supplément "tenue nouvel adhérent" : ajouté uniquement pour les nouvelles
-  // adhésions, en plus du coût des articles commandés (tshirt × prix +
-  // pantalon × prix). Utilisé tel quel par la génération de PDF et la
-  // ventilation comptable (cf. _lib/pdf.js et payment/helloasso/status.js).
-  const newMemberKit    = isNewMember ? Number(pricing.newMemberKit || 0) : 0;
+  // Correctif du 10/09/2026 : il existait un supplément "tenue nouvel
+  // adhérent" (newMemberKit, 40 € par défaut) qui s'ajoutait au total EN PLUS
+  // du coût des articles commandés (tshirt × prix + pantalon × prix) —
+  // c'est-à-dire qu'un nouvel adhérent payait deux fois sa tenue : une fois
+  // via ce supplément forfaitaire, une fois via tshirtQty/pantalonQty (rendus
+  // obligatoires ci-dessus, donc jamais à 0 pour un nouvel adhérent). Le
+  // formulaire public (public/assets/inscription.js, calculateTotals()) n'a
+  // lui jamais inclus ce supplément dans le total affiché/facturé au
+  // pratiquant — seul le calcul serveur le faisait, d'où un double comptage
+  // à la fois dans le montant réellement encaissé via HelloAsso et dans les
+  // écritures comptables générées (une ligne "Vente kit nouvel adhérent" en
+  // plus des lignes t-shirt/pantalon, cf. payment/helloasso/status.js et
+  // _lib/free-registration.js). Le prix de la tenue est déjà entièrement
+  // porté par tshirtQty × pricingTshirt + pantalonQty × pricingPantalon
+  // ci-dessous (clothingTotal) : ce supplément est donc supprimé du total et
+  // n'est plus facturé séparément. Le réglage "Kit nouvelle inscription" du
+  // logiciel de gestion (club_info.inscription_pricing.newMemberKit) n'a
+  // donc plus aucun effet — conservé en lecture pour compatibilité mais
+  // toujours ignoré ici.
   const passport        = passportEnabled ? Number(pricing.passport || 25) : 0;
   const pricingTshirt   = Number(pricing.tshirt   || 25);
   const pricingPantalon = Number(pricing.pantalon || 15);
@@ -170,7 +184,12 @@ export function calculateTotals(practice, pricing, clothing = {}, extraOrderItem
     cotisation,
     passRegionAmount,
     passport,
-    newMemberKit,
+    // newMemberKit volontairement absent (cf. commentaire ci-dessus) : la
+    // tenue du nouvel adhérent est intégralement portée par clothingTotal.
+    // Les appelants existants font tous `Number(totals.newMemberKit || 0)`,
+    // donc son absence ici équivaut à 0 partout (aucune ligne "Vente kit
+    // nouvel adhérent" ne sera plus générée) sans avoir à toucher chaque
+    // appelant individuellement.
     clothingTotal,
     extraProductsTotal,
     tshirtQty,
@@ -178,7 +197,7 @@ export function calculateTotals(practice, pricing, clothing = {}, extraOrderItem
     pricingTshirt,
     pricingPantalon,
     orderItems,
-    total: cotisation + passport + newMemberKit + clothingTotal + extraProductsTotal,
+    total: cotisation + passport + clothingTotal + extraProductsTotal,
     formulaLabel: formulaLabelMap[formula] || formula,
   };
 }

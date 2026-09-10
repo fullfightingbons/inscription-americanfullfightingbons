@@ -16,8 +16,15 @@ const INDEX_SOURCE = readFileSync(
   "utf8",
 );
 
+// Note : `newMemberKit` n'existe plus dans les totaux produits par
+// calculateTotals() (cf. correctif du 10/09/2026 dans _lib/helpers.js — la
+// tenue du nouvel adhérent était comptée deux fois : une fois via ce
+// supplément forfaitaire, une fois via tshirtQty/pantalonQty). Les fixtures
+// ci-dessous reflètent donc des totaux réalistes ; buildInscriptionSaleLines
+// et buildVenteTenueJournalCreditLines gèrent toujours `newMemberKit` s'il
+// est présent (garde `Number(totals.newMemberKit || 0)`), mais aucun
+// appelant en production ne le fournit plus.
 const TOTALS = {
-  newMemberKit: 40,
   passport: 25,
   tshirtQty: 2,
   pantalonQty: 1,
@@ -29,13 +36,12 @@ const TOTALS = {
   ],
 };
 
-test("buildInscriptionSaleLines details every inscription add-on", () => {
+test("buildInscriptionSaleLines details every inscription add-on without double-counting clothing", () => {
   const lignes = buildInscriptionSaleLines(TOTALS);
 
   assert.deepEqual(
     lignes.map((ligne) => ligne.desc),
     [
-      "Vente kit nouvel adhérent",
       "Vente passeport sportif",
       "Vente t-shirt club AFFBC",
       "Vente pantalon club AFFBC",
@@ -44,8 +50,17 @@ test("buildInscriptionSaleLines details every inscription add-on", () => {
   );
   assert.equal(
     lignes.reduce((sum, ligne) => sum + ligne.qte * ligne.pu, 0),
-    160,
+    120,
   );
+});
+
+test("buildInscriptionSaleLines still tolerates a legacy newMemberKit field without failing", () => {
+  // Filet de sécurité seulement : si un appelant fournissait encore ce champ
+  // (données historiques, appel direct de la fonction...), il ne doit pas
+  // faire planter la génération des lignes — mais plus aucun code de
+  // production ne le peuple.
+  const lignes = buildInscriptionSaleLines({ ...TOTALS, newMemberKit: 40 });
+  assert.equal(lignes.some((ligne) => ligne.desc === "Vente kit nouvel adhérent"), true);
 });
 
 test("buildVenteTenueJournalCreditLines keeps accounting compact by account", () => {
@@ -67,7 +82,7 @@ test("buildVenteTenueJournalCreditLines keeps accounting compact by account", ()
   assert.deepEqual(
     entries.map((entry) => [entry.piece, entry.compte, entry.credit]),
     [
-      ["VTE-abc12345-ART", "707 - Ventes vêtements et équipements", 135],
+      ["VTE-abc12345-ART", "707 - Ventes vêtements et équipements", 95],
       ["VTE-abc12345-PAS", "7562 - Cotisations licences et adhésions annexes", 25],
     ],
   );
