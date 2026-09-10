@@ -94,14 +94,12 @@ function buildMinorPayload(overrides = {}) {
       signedAt: isoDate(0),
       ...overrides.legalRepresentative,
     },
-    // Pour un mineur, c'est le representant legal qui signe le consentement
-    // "droit a l'image" (legalConsentSignatureName), pas le pratiquant
-    // (applicantSignatureName, seul champ que buildPayload renseigne par
-    // defaut) : cf. le bloc if (minor) de validatePayload, inscription.js.
-    consents: {
-      legalConsentSignatureName: "Marie Dupont",
-      ...overrides.consents,
-    },
+    // Payload mineur réaliste : le formulaire (validateStep case 6) ne
+    // collecte jamais applicantSignatureName pour un mineur, seulement
+    // legalConsentSignatureName (signature du représentant légal pour le
+    // droit à l'image — distincte de legalRepresentative.signatureName
+    // ci-dessus, qui couvre l'autorisation parentale elle-même).
+    consents: { applicantSignatureName: "", legalConsentSignatureName: "Marie Dupont", ...overrides.consents },
   });
 }
 
@@ -166,6 +164,43 @@ test("validatePayload rejects a final consent signed before the applicant's birt
         }),
       ),
     /signature ne peut pas être antérieure à la date de naissance/,
+  );
+});
+
+// Bug du 10/09/2026 : validatePayload exigeait toujours
+// consents.applicantSignatureName, même pour un mineur — alors que le
+// formulaire public (validateStep case 6) ne collecte QUE
+// legalConsentSignatureName dans ce cas. Un dossier mineur valide côté
+// formulaire était donc rejeté à l'envoi avec "Signature du pratiquant
+// obligatoire". Le fixture buildMinorPayload() ci-dessus fournit toujours
+// applicantSignatureName (hérité de buildPayload) : il masquait ce bug côté
+// tests. Les trois tests suivants reflètent un payload mineur réaliste (sans
+// applicantSignatureName) pour éviter de régresser silencieusement.
+test("validatePayload accepts a minor payload without the applicant's own signature", () => {
+  const result = validatePayload(
+    buildMinorPayload({
+      consents: { applicantSignatureName: "", legalConsentSignatureName: "Marie Dupont" },
+    }),
+  );
+  assert.equal(result.minor, true);
+});
+
+test("validatePayload rejects a minor payload missing the legal representative's consent signature", () => {
+  assert.throws(
+    () =>
+      validatePayload(
+        buildMinorPayload({
+          consents: { applicantSignatureName: "", legalConsentSignatureName: "" },
+        }),
+      ),
+    /Signature du représentant légal \(droit à l'image\) obligatoire/,
+  );
+});
+
+test("validatePayload still rejects an adult payload missing the applicant's own signature", () => {
+  assert.throws(
+    () => validatePayload(buildPayload({ consents: { applicantSignatureName: "" } })),
+    /Signature du pratiquant obligatoire/,
   );
 });
 

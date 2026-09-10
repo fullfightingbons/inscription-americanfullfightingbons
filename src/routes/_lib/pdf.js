@@ -47,7 +47,7 @@
  *   médaillon-texte par défaut.
  */
 
-import { currentSeasonLabel, isMinor } from './helpers.js';
+import { currentSeasonLabel } from './helpers.js';
 import { addAutoImage, addPngImage, safe, PdfBuilder, buildPdfDocument, measureTextWidth, ML, MM, CW } from './pdf-engine.js';
 import { mergeAttachedPdfs } from './pdf-merge.js';
 import {
@@ -281,7 +281,6 @@ export async function generateAdherentPdf(registration, photo = null, env = null
   const id    = registration.identity        || {};
   const ct    = registration.contact         || {};
   const em    = registration.emergency       || {};
-  const lr    = registration.legalRepresentative || {};
   const pr    = registration.practice        || {};
   const hl    = registration.health          || {};
   const co    = registration.clothingOrder   || {};
@@ -290,12 +289,6 @@ export async function generateAdherentPdf(registration, photo = null, env = null
   const pay   = registration.payment         || {};
   const qs    = hl.qsSport                   || {};
   const orderItems = Array.isArray(totals.orderItems) ? totals.orderItems : [];
-  // Determine une seule fois si le pratiquant est mineur (cf. helpers.js) :
-  // conditionne l'affichage du bloc "Autorisation parentale" (S3) et le
-  // signataire du consentement "droit a l'image" (S6), en miroir de la
-  // meme bascule cote client (updateConditionals) et cote validation
-  // Worker (validatePayload, tous deux dans/pres de inscription.js).
-  const minor = isMinor(id.birthDate);
 
   const formulaLabel = totals.formulaLabel || pr.formulaCode || 'Tarif de base';
   const cotisation   = Number(totals.cotisation   || 0);
@@ -566,48 +559,6 @@ export async function generateAdherentPdf(registration, photo = null, env = null
     y += 12;
   }
 
-  // Autorisation parentale (uniquement pour un mineur) — champs collectes a
-  // l'etape 3 "Pratique" du formulaire public (cf. case 3 de validateStep
-  // dans public/assets/inscription.js) et valides cote Worker (bloc
-  // if (minor) de validatePayload, src/routes/api/public/inscription.js) ;
-  // jusqu'ici jamais restitues dans le dossier PDF.
-  if (minor) {
-    ensureSpace(9);
-    p.setFont('F1', 6);
-    p.text('AUTORISATION PARENTALE', ML/MM, y, { color: MUTED });
-    y += 5;
-    field('Nom',    safe(lr.lastName)?.toUpperCase(), ML/MM,        y, tw);
-    field('Prenom', safe(lr.firstName),               ML/MM+tw+2,   y, tw);
-    field('Qualite',safe(lr.role),                    ML/MM+2*(tw+2), y, tw);
-    y += 11;
-
-    ensureSpace(14);
-    const lsw = (CW/MM - 4) / 2;
-    [['Fait a', safe(lr.city)], ['Le', safe(lr.signedAt)]].forEach(([lbl, val], i) => {
-      p.setFillRgb(WHITE);
-      p.setStrokeRgb(LINE);
-      p.setLineWidth(0.2);
-      p.roundedRect(ML/MM + i * (lsw + 4), y, lsw, 11, 1.5, 'B');
-      p.setFont('F1', 5);
-      p.text(lbl.toUpperCase(), ML/MM + i * (lsw + 4) + 2, y + 3.2, { color: MUTED });
-      p.setFont('F1', 7);
-      p.text(val || '-',        ML/MM + i * (lsw + 4) + 2, y + 7.5, { color: INK });
-    });
-    y += 14;
-
-    ensureSpace(14);
-    p.setFillRgb(WHITE);
-    p.setStrokeRgb(LINE);
-    p.setLineWidth(0.2);
-    p.roundedRect(ML/MM, y, CW/MM, 13, 1.5, 'B');
-    p.setFont('F1', 5);
-    p.text("SIGNATURE DU REPRESENTANT LEGAL (autorisation parentale) - nom saisi valant signature electronique",
-           ML/MM + 2, y + 3.5, { color: MUTED });
-    p.setFont('F3', 12);
-    p.text(safe(lr.signatureName) || '', ML/MM + 3, y + 10.5, { color: INK });
-    y += 16;
-  }
-
   // ══════════════════════════════════════════════════════════════════════════════
   // S4 — TENUE
   // ══════════════════════════════════════════════════════════════════════════════
@@ -759,23 +710,16 @@ export async function generateAdherentPdf(registration, photo = null, env = null
   // signature capturee) ; rendu en Times-Italic (F3) pour un rendu plus proche
   // d'une signature manuscrite, meme police que le bloc signataire des
   // attestations de cotisation (cf. document-template.js, type 'attestation').
-  // Pour un mineur, c'est le representant legal qui signe ce consentement
-  // (droit a l'image), pas le pratiquant lui-meme : meme bascule que cote
-  // client (inscription.js, updateConditionals / validateStep case 6) et
-  // cote validation Worker (validatePayload, inscription.js).
-  const signatureLabel = minor
-    ? "SIGNATURE DU REPRESENTANT LEGAL (droit a l'image) - nom saisi valant signature electronique"
-    : "SIGNATURE DE L'ADHERENT(E) - nom saisi valant signature electronique";
-  const signatureValue = minor ? cs.legalConsentSignatureName : cs.applicantSignatureName;
   ensureSpace(14);
   p.setFillRgb(WHITE);
   p.setStrokeRgb(LINE);
   p.setLineWidth(0.2);
   p.roundedRect(ML/MM, y, CW/MM, 13, 1.5, 'B');
   p.setFont('F1', 5);
-  p.text(signatureLabel, ML/MM + 2, y + 3.5, { color: MUTED });
+  p.text("SIGNATURE DE L'ADHERENT(E) - nom saisi valant signature electronique",
+         ML/MM + 2, y + 3.5, { color: MUTED });
   p.setFont('F3', 12);
-  p.text(safe(signatureValue) || '', ML/MM + 3, y + 10.5, { color: INK });
+  p.text(safe(cs.applicantSignatureName) || '', ML/MM + 3, y + 10.5, { color: INK });
   y += 16;
 
   // Bloc réservé club

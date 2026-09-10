@@ -355,9 +355,13 @@ export function validatePayload(payload) {
 
   if (!toBool(consents.rulesAccepted)) throw new Error("L'acceptation du règlement intérieur est obligatoire");
   if (consents.imageRights !== "yes" && consents.imageRights !== "no") throw new Error("Le choix du droit à l'image est obligatoire");
-  // Comme côté client (inscription.js, case 6 de validateStep) : le pratiquant
-  // signe lui-même le consentement "droit à l'image", sauf s'il est mineur, où
-  // c'est le représentant légal qui signe (champ legalConsentSignatureName).
+  // Bug du 10/09/2026 : cette vérification était inconditionnelle alors que
+  // le formulaire (public/assets/inscription.js, validateStep case 6) ne
+  // demande la signature du pratiquant lui-même QUE pour un majeur ; pour un
+  // mineur, seule la signature du représentant légal (droit à l'image) est
+  // collectée (legalConsentSignatureName, déjà vérifiée ci-dessous). Un
+  // dossier mineur valide côté formulaire était donc systématiquement
+  // rejeté ici, à l'envoi, avec "Signature du pratiquant obligatoire".
   if (minor) {
     requireText(consents.legalConsentSignatureName, "Signature du représentant légal (droit à l'image)");
   } else {
@@ -429,7 +433,7 @@ async function getHelloAssoToken(env) {
   return data.access_token;
 }
 
-async function createHelloAssoCheckout(env, payload, totals, registrationId) {
+export async function createHelloAssoCheckout(env, payload, totals, registrationId) {
   if (!env.HELLOASSO_CLIENT_ID || !env.HELLOASSO_CLIENT_SECRET || !env.HELLOASSO_ORGANIZATION_SLUG) {
     throw new Error("HelloAsso n'est pas configuré (variables d'environnement manquantes).");
   }
@@ -455,6 +459,22 @@ async function createHelloAssoCheckout(env, payload, totals, registrationId) {
   payerFirstName = normalizeHelloAssoFirstName(payerFirstName, firstName) || "Adherent";
   payerLastName  = normalizeHelloAssoLastName (payerLastName,  lastName)  || "AFFBC";
 
+  // Bug du 10/09/2026 : `dateOfBirth` envoyée à HelloAsso était TOUJOURS la
+  // date de naissance du pratiquant (payload.identity.birthDate), qui est
+  // aussi celle du payeur uniquement quand le pratiquant paie lui-même
+  // (adhérent majeur). Pour un mineur, le payeur réel est le représentant
+  // légal (cf. payerFirstName/payerLastName juste au-dessus, qui basculent
+  // déjà correctement sur legalRep) — mais sa date de naissance n'est
+  // jamais collectée par le formulaire. On envoyait donc la date de
+  // naissance du mineur comme date de naissance de l'« acheteur » côté
+  // HelloAsso, qui refuse alors le checkout avec l'erreur 400
+  // "L'acheteur doit être majeur" (ArgumentInvalid). Comme pour
+  // address/city/zipCode juste en dessous, ce champ est optionnel pour
+  // HelloAsso (`|| undefined` retire la clé du JSON envoyé) : on ne
+  // l'envoie donc que lorsque le pratiquant est majeur, c'est-à-dire
+  // lorsqu'il est effectivement lui-même le payeur.
+  const registrantIsMinor = isMinor(String(payload.identity?.birthDate || "").trim());
+
   const body = {
     totalAmount:   amountCents,
     initialAmount: installmentPlan.initialAmount,
@@ -467,7 +487,7 @@ async function createHelloAssoCheckout(env, payload, totals, registrationId) {
       firstName: payerFirstName,
       lastName:  payerLastName,
       email:     String(payload.contact?.email    || "").trim(),
-      dateOfBirth: String(payload.identity?.birthDate || "").trim() || undefined,
+      dateOfBirth: registrantIsMinor ? undefined : (String(payload.identity?.birthDate || "").trim() || undefined),
       address:   String(payload.contact?.address1 || "").trim()    || undefined,
       city:      String(payload.contact?.city     || "").trim()    || undefined,
       zipCode:   String(payload.contact?.postalCode|| "").trim()   || undefined,
