@@ -746,6 +746,38 @@ async function findMatchingAdherent(db, payload) {
   return { adherent, renewalVerified: true, reason: null };
 }
 
+// ── Blacklist (radiation prononcée par le bureau, ou refus d'adhésion) ────
+// adherents.blackliste est posé/levé côté logiciel de gestion (POST/DELETE
+// /api/adherents/:id/blacklist, cf. migration 0034 du projet "gestion") —
+// même base D1 partagée entre les deux workers (wrangler.json des deux
+// projets : binding DB identique, database_id 678b90d9-...).
+//
+// Comparaison nom + prénom + date de naissance UNIQUEMENT — pas l'email :
+// une personne blacklistée pourrait sinon repasser le blocage simplement en
+// utilisant une adresse différente. C'est un compromis volontairement
+// tourné vers le sur-blocage plutôt que le sous-blocage : un homonyme exact
+// (même nom, prénom ET date de naissance) qui se ferait bloquer par erreur
+// devra contacter le club, ce qui reste un moindre mal pour une mesure de
+// sécurité de ce type. Même normalisation que findMatchingAdherent
+// ci-dessus (accents, casse, format de date), pour ne pas manquer un
+// blocage légitime à cause d'un nom retapé avec/sans accent.
+export async function checkBlacklist(db, payload) {
+  const nom       = normalizeNameForComparison(payload.identity?.lastName);
+  const prenom    = normalizeNameForComparison(payload.identity?.firstName);
+  const birthDate = normalizeDateForComparison(payload.identity?.birthDate);
+  if (!nom || !prenom || !birthDate) return false;
+
+  const { results } = await db
+    .prepare(`SELECT nom, prenom, naissance FROM adherents WHERE blackliste = 1`)
+    .all();
+  return (results || []).some(
+    (a) =>
+      normalizeNameForComparison(a.nom) === nom &&
+      normalizeNameForComparison(a.prenom) === prenom &&
+      normalizeDateForComparison(a.naissance) === birthDate,
+  );
+}
+
 // ─── Handler principal ────────────────────────────────────────────────────────
 
 export async function onRequestPost(context) {
@@ -779,6 +811,30 @@ export async function onRequestPost(context) {
 
     const payload    = parseJsonField(formData, "payload");
     const validation = validatePayload(payload);
+
+    // ── Blocage blacklist (radiation prononcée par le bureau) ────────────────
+    // Vérifié tout de suite après la validation de forme, avant toute
+    // création de ligne "brouillon" ou upload de pièce jointe : si la
+    // personne est bloquée, il ne doit rien rester à nettoyer (pas de ligne
+    // orpheline, pas de fichier sensible envoyé pour rien).
+    //
+    // Message volontairement générique : une exclusion reste une décision du
+    // bureau à assumer humainement, pas quelque chose à notifier tel quel
+    // depuis un formulaire public (et ça évite de confirmer à un tiers
+    // qu'une identité précise est blacklistée).
+    if (await checkBlacklist(context.env.DB, payload)) {
+      await writeAuditLog(context.env.DB, {
+        action:     "public.inscription_blocked_blacklist",
+        entityType: "adherents",
+        entityId:   null,
+        details:    { nom: payload.identity?.lastName, prenom: payload.identity?.firstName, birthDate: payload.identity?.birthDate },
+        ip:         getClientIp(context.request),
+      }).catch(() => {});
+      return badRequest(
+        "Votre inscription ne peut pas être validée en l'état. Merci de contacter le club pour plus d'informations.",
+        403,
+      );
+    }
 
     // ── Vérification renouvellement ──────────────────────────────────────────
     let matchingAdherent = null;
