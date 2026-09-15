@@ -45,20 +45,29 @@ async function computeHmacHex(payload, secret) {
     .join("");
 }
 
-function isStrictSignatureRequired(env) {
-  return env.HELLOASSO_ENV !== "sandbox";
-}
-
+// Bug du 15/09/2026 : la signature HMAC (header x-ha-signature) est une
+// fonctionnalité HelloAsso réservée aux comptes « partenaire »
+// (cf. dev.helloasso.com/docs/secure-webhook : « Fonctionnalité disponible
+// uniquement pour les partenaires. »). AFFBC est une association standard
+// (authentification par client_id/client_secret, cf.
+// dev.helloasso.com/docs/obtenir-une-clé-api — pas la mire d'autorisation
+// partenaire) : HelloAsso ne lui enverra donc JAMAIS de x-ha-signature, quel
+// que soit le réglage côté club. L'ancien code rejetait pourtant sans appel
+// toute notification de production dépourvue de signature — ce qui revenait à rejeter 100 % des notifications HelloAsso en
+// production, quelle que soit leur authenticité. C'est très probablement la
+// cause des inscriptions payées côté HelloAsso mais jamais finalisées côté
+// gestion (fiche/PDF/comptabilité absents) : le webhook, seul filet de
+// sécurité si le retour navigateur échoue, était rejeté à chaque tentative.
+//
+// Correctif : repli sur la vérification par adresse IP source — méthode
+// documentée par HelloAsso lui-même pour les associations standard, dans les
+// deux environnements (production ET sandbox), pas seulement en sandbox.
 async function verifyHelloAssoNotification(request, rawBody, env) {
   const signatureHeader = String(request.headers.get("x-ha-signature") || "").trim();
   const signatureKey = String(env.HELLOASSO_NOTIFICATION_SIGNATURE_KEY || "").trim();
   if (signatureHeader && signatureKey) {
     const computedSignature = await computeHmacHex(rawBody, signatureKey);
     return timingSafeEqual(computedSignature, signatureHeader);
-  }
-
-  if (isStrictSignatureRequired(env)) {
-    return false;
   }
 
   const clientIp = getClientIp(request);
@@ -79,7 +88,6 @@ export {
   getClientIp,
   getRegistrationIdFromNotification,
   getExpectedNotificationIps,
-  isStrictSignatureRequired,
   timingSafeEqual,
   verifyHelloAssoNotification,
 };

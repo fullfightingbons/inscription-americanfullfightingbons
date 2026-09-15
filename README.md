@@ -86,8 +86,20 @@ Secrets attendus côté Cloudflare selon l'environnement :
 Optionnel :
 
 - `PUBLIC_ORIGIN` pour forcer l'origine publique canonique si besoin
-- `HELLOASSO_NOTIFICATION_SIGNATURE_KEY` si vous utilisez une signature webhook HelloAsso
+- `HELLOASSO_NOTIFICATION_SIGNATURE_KEY` — **uniquement pertinent pour un compte HelloAsso « partenaire »** (cf. dev.helloasso.com/docs/secure-webhook). Un compte association standard (authentification par `HELLOASSO_CLIENT_ID`/`HELLOASSO_CLIENT_SECRET`, ce qui est le cas ici) ne reçoit jamais de `x-ha-signature` : laisser ce secret vide. `verifyHelloAssoNotification` (notification-helpers.js) se rabat alors sur la vérification par adresse IP source (51.138.206.200 en production, 4.233.135.234 en sandbox), documentée par HelloAsso pour ce cas.
 - `INSCRIPTION_ADMIN_STATUS_TOKEN` pour activer `/api/admin/inscription/status`, une route admin en lecture seule qui renvoie uniquement des agrégats de dossiers
+
+### ⚠️ Étape manuelle obligatoire : enregistrer l'URL de webhook auprès de HelloAsso
+
+Rien dans ce dépôt (ni `wrangler.json`, ni un script de déploiement) n'enregistre automatiquement l'URL de notification auprès de HelloAsso — **c'est une étape à faire une fois, manuellement, dans leur interface**, sans quoi `/api/public/payment/helloasso/notification` ne recevra jamais aucun appel. Sans ce webhook, la finalisation d'une inscription (création de la fiche adhérent, du PDF, de l'écriture comptable) ne repose plus que sur le retour du navigateur après paiement — peu fiable si l'onglet se ferme avant la fin du polling (~10 s).
+
+Pour l'enregistrer (compte association, pas partenaire) : se connecter sur helloasso.com, **Mon Compte > Intégrations et API**, et renseigner :
+
+```
+https://inscription.americanfullfightingbons.fr/api/public/payment/helloasso/notification
+```
+
+À refaire pour chaque nouvel environnement (sandbox vs production ont des URLs de notification distinctes).
 
 ## URLs publiques
 

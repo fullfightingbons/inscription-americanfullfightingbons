@@ -661,12 +661,37 @@ async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId,
     : null,
   ].filter((entry, index, array) => entry && array.findIndex((item) => item?.email === entry.email) === index);
 
-  // Génération PDF via le nouveau générateur mis en page
-  const payload = buildRegistrationPayload(registration, dossier, adherentId, exercise);
-  const photo = await fetchPhotoDocument(env, registration.documents_json);
-  const pdfBytes = await generateAdherentPdfWithAttachments(payload, photo, env);
-  const pdfContent = uint8ToBase64(pdfBytes);
-  const fileName = `inscription-affbc-${String(registration.id || "").slice(0, 8)}.pdf`;
+  // Bug du 15/09/2026 : cette étape (génération du PDF pour la pièce
+  // jointe) n'était protégée par aucun try/catch, contrairement à
+  // storeRegistrationPdf juste en dessous. Une erreur de génération PDF
+  // (image corrompue, document joint illisible, etc.) remontait donc
+  // jusqu'au handler appelant et faisait échouer TOUTE la réponse HTTP —
+  // alors que la fiche adhérent et les écritures comptables avaient déjà
+  // été créées avec succès juste avant. Pire : une fois adherent_id posé,
+  // le rappel suivant (webhook, bouton "Vérifier à nouveau") passe par la
+  // branche "déjà traité" plus haut, qui ne relance jamais cette fonction —
+  // le dossier restait donc bloqué indéfiniment sans PDF ni email, sans
+  // jamais se rattraper tout seul (cas observé : RUCHE Stéphanie, fiche et
+  // comptabilité bien créées, aucun PDF/email).
+  //
+  // Correctif : on tente la génération du PDF, mais un échec n'empêche plus
+  // l'email de partir (avec un message adapté, sans pièce jointe) ni la
+  // réponse HTTP de refléter le succès du paiement — cohérent avec
+  // storeRegistrationPdf qui traite déjà cet échec comme non bloquant.
+  let pdfContent = null;
+  let fileName = `inscription-affbc-${String(registration.id || "").slice(0, 8)}.pdf`;
+  try {
+    const payload  = buildRegistrationPayload(registration, dossier, adherentId, exercise);
+    const photo    = await fetchPhotoDocument(env, registration.documents_json);
+    const pdfBytes = await generateAdherentPdfWithAttachments(payload, photo, env);
+    pdfContent = uint8ToBase64(pdfBytes);
+  } catch (error) {
+    console.error("[sendPaymentConfirmedAlert] Génération PDF impossible, envoi de l'email sans pièce jointe:", error?.message ?? String(error));
+  }
+
+  const attachmentNote = pdfContent
+    ? "<p><strong>Pièce jointe :</strong> le dossier PDF récapitulatif est joint à cet email.</p>"
+    : "<p style=\"color:#a23521\"><strong>⚠️ Le PDF récapitulatif n'a pas pu être généré automatiquement.</strong> Il peut être régénéré manuellement depuis la fiche adhérent dans le logiciel de gestion.</p>";
 
   await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
@@ -691,7 +716,7 @@ async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId,
       <p><strong>Montant :</strong> ${Number(registration.montant_total || 0).toFixed(2)} €</p>
       <p><strong>Référence inscription :</strong> ${registration.id}</p>
       <p><strong>Fiche adhérent créée (ID) :</strong> ${adherentId}</p>
-      <p><strong>Pièce jointe :</strong> le dossier PDF récapitulatif est joint à cet email.</p>
+      ${attachmentNote}
       <p style="color:#888;font-size:12px">
       La fiche adhérent est maintenant visible dans le logiciel de gestion,
       onglet <strong>Adhérents</strong>. Si une tenue a été commandée,
@@ -705,14 +730,11 @@ async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId,
         `Montant : ${Number(registration.montant_total || 0).toFixed(2)} €`,
                          `Référence : ${registration.id}`,
                          `Fiche adhérent ID : ${adherentId}`,
-                         `PDF joint : ${fileName}`,
+                         pdfContent ? `PDF joint : ${fileName}` : "PDF non généré automatiquement — à régénérer depuis la fiche adhérent.",
       ].join("\n"),
-                         attachment: [
-                           {
-                             name: fileName,
-                             content: pdfContent,
-                           },
-                         ],
+                         ...(pdfContent
+                           ? { attachment: [{ name: fileName, content: pdfContent }] }
+                           : {}),
     }),
   }).catch((err) => {
     console.error("[Brevo] Echec envoi email confirmation:", err?.message ?? String(err));
@@ -893,6 +915,46 @@ export async function onRequestGet(context) {
           remainingAmountCents: paymentSnapshot.remainingAmountCents,
         },
       });
+
+      // Rattrapage du 15/09/2026 : avant le correctif de
+      // sendPaymentConfirmedAlert ci-dessus, une inscription pouvait rester
+      // bloquée avec adherent_id posé mais sans PDF ni email (cf. RUCHE
+      // Stéphanie — fiche + comptabilité créées, PDF jamais généré). Cette
+      // branche "déjà traité" ne relançait jamais ces deux étapes. On
+      // vérifie donc ici si le PDF manque encore sur la fiche et, si oui,
+      // on le (re)génère et on renvoie l'email — de façon à ce qu'un simple
+      // nouvel appel de ce endpoint (bouton "Vérifier à nouveau", ou retry
+      // webhook) suffise à rattraper un dossier resté incomplet, sans
+      // intervention manuelle en base.
+      const adherentRow = await context.env.DB
+        .prepare(`SELECT pdf_inscription_storage_path FROM adherents WHERE id = ? LIMIT 1`)
+        .bind(registration.adherent_id)
+        .first();
+      if (adherentRow && !adherentRow.pdf_inscription_storage_path) {
+        const storedPdf = await storeRegistrationPdf(
+          context.env, registration, dossier, registration.adherent_id, exercise
+        );
+        if (storedPdf) {
+          const pdfUrl = `/api/storage/fullfighting-pdf/${storedPdf.key}`;
+          await context.env.DB.prepare(
+            `UPDATE adherents
+            SET pdf_inscription_storage_path = ?,
+            pdf_inscription_public_url   = ?,
+            pdf_inscription_nom_fichier  = ?,
+            pdf_inscription_uploaded_at  = ?,
+            updated_at       = ?
+            WHERE id = ?`
+          ).bind(
+            storedPdf.key,
+            pdfUrl,
+            storedPdf.fileName,
+            new Date().toISOString(),
+                 new Date().toISOString(),
+                 registration.adherent_id
+          ).run();
+        }
+        await sendPaymentConfirmedAlert(context.env, registration, dossier, registration.adherent_id, exercise);
+      }
 
       return json({
         data: {
