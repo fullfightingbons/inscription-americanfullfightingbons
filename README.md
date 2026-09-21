@@ -101,6 +101,23 @@ https://inscription.americanfullfightingbons.fr/api/public/payment/helloasso/not
 
 À refaire pour chaque nouvel environnement (sandbox vs production ont des URLs de notification distinctes).
 
+## E-mail de confirmation de paiement
+
+Quand le paiement HelloAsso est confirmé (`payment/helloasso/status.js` → `sendPaymentConfirmedAlert`), **un seul e-mail Brevo** part au club et à l'adhérent, avec **deux pièces jointes distinctes** :
+
+- `inscription-affbc-XXXXXXXX.pdf` : le dossier récapitulatif (questionnaire de santé, consentements, pièces déposées fusionnées) ;
+- `Recu-cotisation-<Prénom>-<NOM>-<saison>.pdf` : le reçu de cotisation — cotisation, Pass Région, t-shirt, pantalon, passeport sportif et produits en option, avec l'état du paiement quand il est en 2 ou 3 fois.
+
+Le reçu est un fichier **séparé** du récapitulatif pour que l'adhérent puisse le transmettre (employeur, comité d'entreprise, mutuelle) sans communiquer ses données de santé.
+
+- C'est **le même document** que le bouton « Reçu » de l'onglet Adhérents de `gestion` (mêmes lignes, même total, même numéro `REC-<saison>-<id adhérent>`). Son code, `src/routes/_lib/cotisation-receipt.js`, est une **copie** de `gestion/src/lib/pdf/cotisation-receipt.ts` : les deux fichiers doivent être modifiés ensemble (les tests de chaque repo portent les mêmes valeurs de référence).
+- Un échec de génération du reçu n'empêche jamais l'envoi : l'e-mail part avec le seul récapitulatif et le signale. Si Brevo refuse l'envoi (erreur 4xx) alors que le reçu est joint, l'e-mail est renvoyé sans lui.
+- Pas de reçu pour une inscription gratuite (total nul).
+- Les e-mails envoyés à la **réception** du dossier (avant paiement) n'ont pas de reçu : rien n'est encore réglé.
+- Limites Brevo : 4 Mo par pièce jointe, 20 Mo par message.
+
+Secret Cloudflare : `BREVO_API_KEY` (sans lui, aucun e-mail n'est envoyé).
+
 ## URLs publiques
 
 - `/` : formulaire d'inscription

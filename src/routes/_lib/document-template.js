@@ -310,12 +310,15 @@ function drawParagraphs(p, paragraphs, y) {
  * @param {'facture'|'don'|'cotisation'|'attestation'} doc.type
  * @returns {Uint8Array}
  */
-export function buildDocumentPdfBytes(doc) {
-  const p = new PdfBuilder();
+export function buildDocumentPdfBytes(doc, builder = null) {
+  // `builder` : PdfBuilder déjà créé par l'appelant, quand il a dû y enregistrer une image AVANT
+  // (le logo, résolu de façon asynchrone via ASSETS — cf. resolveLogoImage dans pdf.js). Le
+  // `doc.logoImage` fourni doit alors provenir de CE builder. Sans lui, un builder neuf est créé.
+  const p = builder || new PdfBuilder();
   const titres = {
     facture: 'Facture',
     don: 'Recu de don',
-    cotisation: 'Recu de cotisation',
+    cotisation: 'Reçu de cotisation',
     attestation: 'Attestation de cotisation',
   };
 
@@ -346,5 +349,8 @@ export function buildDocumentPdfBytes(doc) {
 
   drawFooter(p, { mentionTva: doc.mentionTva, note: doc.footerNote });
 
-  return buildPdfDocument(p.getStreams(), p.images);
+  return buildPdfDocument(p.getStreams(), p.images, {
+    title: doc.pdfTitle || `${titres[doc.type] || 'Document'} ${doc.numero}`,
+    author: CLUB_NOM,
+  });
 }

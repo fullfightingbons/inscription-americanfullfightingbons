@@ -22,6 +22,7 @@ import {
   updateRegistrationPayment,
 } from "../../../../_lib/public-payments.js";
 import { generateAdherentPdfWithAttachments, fetchPhotoDocument } from "../../../../_lib/pdf.js";
+import { generateCotisationReceiptPdf } from "../../../../_lib/cotisation-receipt.js";
 import { isMinor, toBool, findActiveExercise, seasonLabelFromExercise, disciplineFromFormula } from "../../../../_lib/helpers.js";
 import {
   buildAdditionalOrderSyncItems,
@@ -645,9 +646,46 @@ function buildRegistrationPayload(registration, dossier, adherentId, exercise) {
   };
 }
 
+// ─── Reçu de cotisation joint à l'e-mail de confirmation ─────────────────────
+//
+// Même document que le bouton « Reçu » de l'onglet Adhérents de gestion (mêmes lignes, même
+// total, même numéro REC-<saison>-<id adhérent>) : on lit donc la MÊME fiche `adherents` que
+// gestion, tout juste créée/mise à jour, plutôt que de recomposer les montants ici.
+//
+// Retourne null quand il n'y a rien à recevoir (total nul), lève en cas d'anomalie — l'appelant
+// traite l'échec comme non bloquant, comme pour le PDF récapitulatif.
+async function generateConfirmationReceipt(env, registration, dossier, adherentId, exercise, paymentSnapshot) {
+  const adherent = await env.DB.prepare(`SELECT * FROM adherents WHERE id = ? LIMIT 1`).bind(adherentId).first();
+  if (!adherent) throw new Error(`fiche adhérent introuvable (${adherentId})`);
+
+  const registrationRow = {
+    id: registration.id,
+    // Le paiement vient d'être confirmé : le statut lu au début de la requête peut encore être
+    // « traitement_paiement » (verrou anti-concurrence), qui exclurait l'inscription du reçu.
+    statut: paymentSnapshot?.status || "payee",
+    submitted_at: registration.submitted_at,
+    created_at: registration.created_at,
+    updated_at: registration.updated_at,
+    // Saison de l'inscription = celle de son exercice (même source que date_fin_adhesion).
+    exercice_date_fin: exercise?.date_fin || null,
+    dossier_json: dossier,
+  };
+  // Le dossier lu au début de la requête n'a pas encore les montants réglés : on fournit l'état
+  // du paiement calculé à l'instant (comptant, ou 1re échéance d'un paiement en 2 ou 3 fois).
+  const payment = paymentSnapshot
+    ? {
+      installmentCount: paymentSnapshot.installmentCount,
+      paidAmountCents: paymentSnapshot.paidAmountCents,
+      remainingAmountCents: paymentSnapshot.remainingAmountCents,
+    }
+    : undefined;
+
+  return generateCotisationReceiptPdf(adherent, [registrationRow], env, { payment });
+}
+
 // ─── Email de confirmation de paiement ───────────────────────────────────────
 
-async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId, exercise) {
+export async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId, exercise, paymentSnapshot = null) {
   if (!env.BREVO_API_KEY) return;
   const clubRecipient = env.SIGNUP_ALERT_TO || "fullfightingbons@gmail.com";
   const registrantRecipient = String(registration.email || "").trim().toLowerCase();
@@ -689,19 +727,49 @@ async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId,
     console.error("[sendPaymentConfirmedAlert] Génération PDF impossible, envoi de l'email sans pièce jointe:", error?.message ?? String(error));
   }
 
-  const attachmentNote = pdfContent
+  // ── Reçu de cotisation : pièce jointe SÉPARÉE du récapitulatif ────────────
+  // Le récapitulatif contient le questionnaire de santé, les consentements et les pièces déposées
+  // (certificat médical, photo d'identité) fusionnées dans le PDF : un adhérent ne peut pas le
+  // transmettre tel quel à un employeur, un comité d'entreprise ou une mutuelle. Le reçu (mêmes
+  // lignes, même total et même numéro que le bouton « Reçu » de gestion) part dans le MÊME e-mail,
+  // en fichier distinct.
+  // Comme pour le récapitulatif, un échec de génération n'empêche jamais l'e-mail de partir.
+  // `receipt` reste null quand il n'y a rien à recevoir (inscription gratuite : total nul) ;
+  // dans ce cas, aucun message d'erreur n'est affiché.
+  let receipt = null;
+  let receiptFailed = false;
+  try {
+    receipt = await generateConfirmationReceipt(env, registration, dossier, adherentId, exercise, paymentSnapshot);
+  } catch (error) {
+    receiptFailed = true;
+    console.error("[sendPaymentConfirmedAlert] Génération du reçu impossible, envoi de l'email sans reçu:", error?.message ?? String(error));
+  }
+  const receiptContent = receipt ? uint8ToBase64(receipt.bytes) : null;
+
+  const recapNote = pdfContent
     ? "<p><strong>Pièce jointe :</strong> le dossier PDF récapitulatif est joint à cet email.</p>"
     : "<p style=\"color:#a23521\"><strong>⚠️ Le PDF récapitulatif n'a pas pu être généré automatiquement.</strong> Il peut être régénéré manuellement depuis la fiche adhérent dans le logiciel de gestion.</p>";
 
-  await fetch("https://api.brevo.com/v3/smtp/email", {
-    method: "POST",
-    headers: {
-      accept: "application/json",
-      "content-type": "application/json",
-      "api-key": env.BREVO_API_KEY,
-    },
-    signal: AbortSignal.timeout(12_000),
-    body: JSON.stringify({
+  // Le message est construit par une fonction pour pouvoir être refait SANS le reçu si Brevo
+  // refusait l'envoi : le reçu ne doit jamais rendre l'e-mail de confirmation moins fiable.
+  const buildMessage = (withReceipt) => {
+    const attachment = [];
+    if (pdfContent) attachment.push({ name: fileName, content: pdfContent });
+    if (withReceipt && receipt) attachment.push({ name: receipt.filename, content: receiptContent });
+
+    const receiptMissing = receiptFailed || (receipt && !withReceipt);
+    const receiptNote = withReceipt && receipt
+      ? `<p><strong>Reçu de cotisation :</strong> joint à cet email dans un fichier séparé (n° ${receipt.numero}). Il ne contient pas les informations de santé du dossier : c'est le document à utiliser pour justifier le paiement.</p>`
+      : receiptMissing
+        ? "<p style=\"color:#a23521\"><strong>⚠️ Le reçu de cotisation n'a pas pu être joint automatiquement.</strong> Il peut être édité depuis la fiche adhérent dans le logiciel de gestion (bouton « Reçu »).</p>"
+        : "";
+    const receiptTextLine = withReceipt && receipt
+      ? `Reçu joint : ${receipt.filename} (n° ${receipt.numero})`
+      : receiptMissing
+        ? "Reçu non joint automatiquement — à éditer depuis la fiche adhérent (bouton Reçu)."
+        : null;
+
+    return {
       sender: {
         name: env.SIGNUP_ALERT_SENDER_NAME || "AFFBC Inscriptions",
         email: from,
@@ -716,7 +784,7 @@ async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId,
       <p><strong>Montant :</strong> ${Number(registration.montant_total || 0).toFixed(2)} €</p>
       <p><strong>Référence inscription :</strong> ${registration.id}</p>
       <p><strong>Fiche adhérent créée (ID) :</strong> ${adherentId}</p>
-      ${attachmentNote}
+      ${recapNote}${receiptNote}
       <p style="color:#888;font-size:12px">
       La fiche adhérent est maintenant visible dans le logiciel de gestion,
       onglet <strong>Adhérents</strong>. Si une tenue a été commandée,
@@ -731,14 +799,38 @@ async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId,
                          `Référence : ${registration.id}`,
                          `Fiche adhérent ID : ${adherentId}`,
                          pdfContent ? `PDF joint : ${fileName}` : "PDF non généré automatiquement — à régénérer depuis la fiche adhérent.",
-      ].join("\n"),
-                         ...(pdfContent
-                           ? { attachment: [{ name: fileName, content: pdfContent }] }
-                           : {}),
-    }),
-  }).catch((err) => {
-    console.error("[Brevo] Echec envoi email confirmation:", err?.message ?? String(err));
+                         receiptTextLine,
+      ].filter(Boolean).join("\n"),
+                         ...(attachment.length ? { attachment } : {}),
+    };
+  };
+
+  const postToBrevo = (message) => fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      "api-key": env.BREVO_API_KEY,
+    },
+    signal: AbortSignal.timeout(12_000),
+    body: JSON.stringify(message),
   });
+
+  try {
+    let response = await postToBrevo(buildMessage(Boolean(receipt)));
+    // Refus explicite de Brevo (4xx) alors que le reçu était joint : on renvoie l'e-mail sans lui,
+    // avec la mention correspondante. Pas de nouvel essai sur une erreur réseau ou 5xx : l'e-mail
+    // a pu partir, un second envoi le doublerait.
+    if (!response.ok && receipt && response.status >= 400 && response.status < 500) {
+      console.error(`[Brevo] Envoi refusé (HTTP ${response.status}) avec le reçu joint, nouvel essai sans le reçu :`, await response.text().catch(() => ""));
+      response = await postToBrevo(buildMessage(false));
+    }
+    if (!response.ok) {
+      console.error(`[Brevo] Echec envoi email confirmation : HTTP ${response.status}`, await response.text().catch(() => ""));
+    }
+  } catch (err) {
+    console.error("[Brevo] Echec envoi email confirmation:", err?.message ?? String(err));
+  }
 }
 
 async function storeRegistrationPdf(env, registration, dossier, adherentId, exercise) {
@@ -953,7 +1045,7 @@ export async function onRequestGet(context) {
                  registration.adherent_id
           ).run();
         }
-        await sendPaymentConfirmedAlert(context.env, registration, dossier, registration.adherent_id, exercise);
+        await sendPaymentConfirmedAlert(context.env, registration, dossier, registration.adherent_id, exercise, paymentSnapshot);
       }
 
       return json({
@@ -1107,7 +1199,7 @@ export async function onRequestGet(context) {
     }
 
     // ── Email de confirmation ─────────────────────────────────────────────────
-    await sendPaymentConfirmedAlert(context.env, registration, dossier, adherentId, exercise);
+    await sendPaymentConfirmedAlert(context.env, registration, dossier, adherentId, exercise, paymentSnapshot);
 
     // ── Réponse ───────────────────────────────────────────────────────────────
     return json({

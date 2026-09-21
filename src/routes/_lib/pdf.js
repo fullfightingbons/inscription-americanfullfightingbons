@@ -255,7 +255,7 @@ async function resolvePhotoImage(p, photo) {
 // defaut (comportement inchange).
 const LOGO_ASSET_PATH = '/assets/Logo_1_nnoir_copie-removebg-preview.png';
 
-async function resolveLogoImage(p, env) {
+export async function resolveLogoImage(p, env) {
   if (!env?.ASSETS) return null;
   try {
     const res = await env.ASSETS.fetch(new URL(LOGO_ASSET_PATH, 'https://assets.internal/'));
