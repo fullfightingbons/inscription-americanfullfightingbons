@@ -22,6 +22,13 @@ const ADHERENT_ELIGIBILITY_URL = '/api/public/adherent-eligibility';
 const SUBMIT_URL = '/api/public/inscription/'; // POST — backend inscription.js
 const STATUS_URL = '/api/public/payment/helloasso/status'; // GET — backend status.js
 const TARIFS_URL = '/api/public/tarifs';
+const RESUME_URL = '/api/public/payment/helloasso/resume'; // POST — backend resume.js
+// Dossier envoyé mais dont le paiement n'est pas confirmé : mémorisé dans ce
+// navigateur pour proposer de reprendre le paiement (les dossiers non payés
+// sont conservés 48 h côté serveur, puis purgés par le cron).
+const PENDING_KEY = 'affbc_pending_payment';
+const PENDING_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+const REGISTRATION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const QS_QUESTIONS = [
   { key: 'familyCardiacDeath', label: 'Un membre de ta famille est-il décédé subitement d\'une cause cardiaque avant 50 ans ?' },
   { key: 'chestPain', label: 'As-tu ressenti une douleur dans la poitrine à l\'effort ?' },
@@ -1390,7 +1397,13 @@ async function submitForm(event) {
 
     // Enregistrer l'ID pour la vérification au retour
     try { sessionStorage.setItem('affbc_reg_id', registrationId); } catch (e) { /* ignore */ }
-    clearDraft();
+    // Le brouillon n'est PAS effacé ici : il ne l'est qu'une fois le paiement
+    // confirmé (showPaymentSuccess). Avant, un retour depuis HelloAsso (flèche
+    // retour, erreur, refus bancaire) retombait sur un formulaire entièrement
+    // vide. Le dossier est en plus mémorisé comme « paiement en attente » pour
+    // pouvoir reprendre le paiement sans tout ressaisir.
+    setPendingPayment(registrationId);
+    saveDraft();
 
     // Redirection vers HelloAsso
     window.location.href = helloAssoUrl;
@@ -1403,10 +1416,71 @@ async function submitForm(event) {
 
 // ─── Retour depuis HelloAsso ──────────────────────────────────────────────────
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// `ref` vient de l'URL et est ensuite réaffiché dans la page : on n'accepte
+// qu'un UUID, ce qui empêche toute injection HTML/JS via un lien forgé.
+function sanitizeRegistrationId(value) {
+  const id = String(value || '').trim();
+  return REGISTRATION_ID_RE.test(id) ? id : '';
+}
+
+function setPendingPayment(registrationId) {
+  try { localStorage.setItem(PENDING_KEY, JSON.stringify({ id: registrationId, ts: Date.now() })); } catch (e) { /* ignore */ }
+}
+
+function getPendingPayment() {
+  try {
+    const raw = localStorage.getItem(PENDING_KEY);
+    if (!raw) return null;
+    const pending = JSON.parse(raw);
+    const id = sanitizeRegistrationId(pending?.id);
+    if (!id || Date.now() - Number(pending?.ts || 0) > PENDING_MAX_AGE_MS) {
+      localStorage.removeItem(PENDING_KEY);
+      return null;
+    }
+    return { id, ts: Number(pending.ts) };
+  } catch (e) { return null; }
+}
+
+function clearPendingPayment() {
+  try { localStorage.removeItem(PENDING_KEY); } catch (e) { /* ignore */ }
+}
+
+function startNewRegistration() {
+  clearPendingPayment();
+  window.location.reload();
+}
+
+async function fetchPaymentStatus(registrationId) {
+  try {
+    const res = await fetch(`${STATUS_URL}?registrationId=${encodeURIComponent(registrationId)}`, { cache: 'no-store' });
+    const data = await res.json().catch(() => null);
+    return data?.data || null;
+  } catch (e) { return null; }
+}
+
+// Interroge le statut jusqu'à `attempts` fois (espacées de 2 s).
+// → `confirmed` : réponse « payé ET dossier finalisé » (sinon null) ;
+//   `last` : dernière réponse exploitable (payé mais en cours de finalisation,
+//   non payé + statut du dossier…), ou null si le serveur n'a pas répondu.
+// Si `processing` est vrai, une autre requête (webhook, autre onglet) finalise
+// le dossier : on continue le polling plutôt que d'afficher un succès
+// prématuré, la fiche adhérent n'existe pas encore.
+async function pollPayment(registrationId, attempts = 5) {
+  let last = null;
+  for (let i = 0; i < attempts; i++) {
+    const data = await fetchPaymentStatus(registrationId);
+    if (data) last = data;
+    if (data?.paid && !data?.processing) return { confirmed: data, last };
+    if (i < attempts - 1) await sleep(2000);
+  }
+  return { confirmed: null, last };
+}
+
 async function handleHelloAssoReturn() {
   const params = new URLSearchParams(location.search);
   const status = params.get('helloasso');
-  const refFromUrl = params.get('ref');
 
   if (!status) return false;
 
@@ -1416,12 +1490,34 @@ async function handleHelloAssoReturn() {
   const form = g('signup-form');
   const successPanel = g('success-panel');
 
-  if (status === 'cancel') {
-    // L'utilisateur a annulé — rester sur le formulaire, étape paiement
-    if (form) form.hidden = false;
-    if (successPanel) successPanel.hidden = true;
-    setAlert('Le paiement a été annulé. Vous pouvez relancer le paiement en bas de cette page.', 'info');
-    showStep(7);
+  // Référence du dossier : URL d'abord, puis mémoire du navigateur.
+  let registrationId = sanitizeRegistrationId(params.get('ref'));
+  if (!registrationId) {
+    try { registrationId = sanitizeRegistrationId(sessionStorage.getItem('affbc_reg_id')); } catch (e) { /* ignore */ }
+  }
+  if (!registrationId) registrationId = getPendingPayment()?.id || '';
+
+  // Retour SANS paiement : flèche retour (cancel), erreur technique HelloAsso
+  // (error) ou lien « reprendre mon paiement » de l'e-mail (resume).
+  // On n'affiche jamais le formulaire ici : le formulaire n'est pas initialisé
+  // à ce stade (init() s'arrête après ce retour) et serait inerte.
+  if (status === 'cancel' || status === 'error' || status === 'resume') {
+    if (form) form.hidden = true;
+    if (!registrationId) {
+      showNoReferencePanel(successPanel, status);
+      return true;
+    }
+    showCheckingPanel(successPanel);
+    // Le paiement a peut-être abouti malgré tout : on vérifie une fois avant
+    // de proposer d'en refaire un.
+    const { confirmed, last } = await pollPayment(registrationId, 1);
+    if (confirmed) {
+      showPaymentSuccess(successPanel, confirmed);
+    } else if (last?.paid) {
+      showPaymentPending(form, successPanel, registrationId, last);
+    } else {
+      showResumePanel(successPanel, registrationId, status, last);
+    }
     return true;
   }
 
@@ -1437,42 +1533,19 @@ async function handleHelloAssoReturn() {
       `;
     }
 
-    // Récupérer l'ID d'inscription
-    let registrationId = refFromUrl;
     if (!registrationId) {
-      try { registrationId = sessionStorage.getItem('affbc_reg_id'); } catch (e) { /* ignore */ }
-    }
-
-    if (!registrationId) {
-      showPaymentError(form, successPanel, 'Référence d\'inscription introuvable. Veuillez contacter le club en indiquant la date et l\'heure de votre paiement HelloAsso.');
+      showNoReferencePanel(successPanel, status);
       return true;
     }
 
     // Polling : jusqu'à 5 tentatives espacées de 2 secondes
-    let paymentData = null;
-    for (let i = 0; i < 5; i++) {
-      try {
-        const res = await fetch(`${STATUS_URL}?registrationId=${encodeURIComponent(registrationId)}`, { cache: 'no-store' });
-        const data = await res.json().catch(() => null);
-        if (data?.data?.paid && !data?.data?.processing) {
-          paymentData = data.data;
-          break;
-        }
-        if (data?.data?.processing) {
-          // Une autre requête (webhook ou autre onglet) est en train de finaliser
-          // le dossier : on continue le polling plutôt que d'afficher un succès
-          // prématuré, la fiche adhérent n'existe pas encore.
-          paymentData = null;
-        }
-      } catch (e) { /* continuer */ }
-      if (i < 4) await new Promise(r => setTimeout(r, 2000));
-    }
+    const { confirmed, last } = await pollPayment(registrationId, 5);
 
-    if (paymentData?.paid) {
-      showPaymentSuccess(successPanel, paymentData);
+    if (confirmed) {
+      showPaymentSuccess(successPanel, confirmed);
     } else {
       // Paiement pas encore confirmé côté API — afficher message intermédiaire
-      showPaymentPending(form, successPanel, registrationId, paymentData);
+      showPaymentPending(form, successPanel, registrationId, last);
     }
     return true;
   }
@@ -1480,8 +1553,40 @@ async function handleHelloAssoReturn() {
   return false;
 }
 
+// Visite « à froid » : si ce navigateur a un dossier dont le paiement n'a jamais
+// été confirmé (onglet fermé sur HelloAsso, retour navigateur…), on vérifie son
+// état au lieu de présenter un formulaire vierge — ce qui évite aussi de payer
+// deux fois. Retourne true si un écran de suivi a été affiché.
+async function handlePendingPaymentOnLoad() {
+  const pending = getPendingPayment();
+  if (!pending) return false;
+
+  const form = g('signup-form');
+  const panel = g('success-panel');
+  const { confirmed, last } = await pollPayment(pending.id, 1);
+
+  if (confirmed) {
+    if (form) form.hidden = true;
+    showPaymentSuccess(panel, confirmed);
+    return true;
+  }
+  if (last?.paid) {
+    showPaymentPending(form, panel, pending.id, last);
+    return true;
+  }
+  if (last && last.registrationStatus === 'paiement_en_attente') {
+    if (form) form.hidden = true;
+    showResumePanel(panel, pending.id, 'pending', last);
+    return true;
+  }
+  // Dossier inconnu, expiré ou statut inattendu : on repart sur le formulaire.
+  clearPendingPayment();
+  return false;
+}
+
 function showPaymentSuccess(panel, paymentData = null) {
   clearDraft();
+  clearPendingPayment();
   if (!panel) return;
   const installmentCount = Number(paymentData?.installmentCount || 1);
   const remainingInstallments = Math.max(0, Number(paymentData?.remainingInstallments || 0));
@@ -1522,11 +1627,138 @@ function showPaymentPending(form, panel, registrationId, paymentData = null) {
   `;
 }
 
-function showPaymentError(form, panel, message) {
-  if (form) form.hidden = false;
-  if (panel) panel.hidden = true;
-  setAlert(message || 'Une erreur est survenue lors de la vérification du paiement.');
-  showStep(7);
+function showCheckingPanel(panel) {
+  if (!panel) return;
+  panel.hidden = false;
+  panel.innerHTML = `
+    <div class="hero-pill">Vérification…</div>
+    <h2>Vérification de votre dossier</h2>
+    <p>Merci de patienter quelques secondes…</p>
+  `;
+}
+
+// Aucune référence de dossier retrouvée : on l'explique et on propose de
+// recommencer, sans jamais laisser un formulaire inerte à l'écran.
+function showNoReferencePanel(panel, status) {
+  if (!panel) return;
+  const text = status === 'success'
+    ? 'Si vous avez payé sur HelloAsso, contactez le club en indiquant la date et l\'heure de votre paiement : votre dossier sera retrouvé.'
+    : 'Si vous aviez déjà envoyé votre dossier, cherchez dans votre messagerie le message « Confirmation de votre inscription AFFBC » : il contient un lien pour reprendre votre paiement. Sinon, vous pouvez recommencer votre inscription.';
+  panel.hidden = false;
+  panel.innerHTML = `
+    <div class="hero-pill" style="background:rgba(196,154,55,.2);color:#674b12">⚠️ Dossier introuvable</div>
+    <h2>Nous n'avons pas retrouvé votre dossier</h2>
+    <p>${text}</p>
+    <div class="success-actions" style="margin-top:18px">
+      <button type="button" class="btn primary" id="new-registration-button">Nouvelle inscription</button>
+    </div>
+  `;
+  panel.querySelector('#new-registration-button')?.addEventListener('click', startNewRegistration);
+}
+
+// Écran « paiement non terminé » : le dossier et les pièces sont déjà
+// enregistrés côté serveur, on propose de rouvrir une page de paiement.
+function showResumePanel(panel, registrationId, reason, last = null) {
+  if (!panel) return;
+
+  // Dossier qui n'est plus repris­sable (purgé après 48 h, statut inattendu).
+  if (last?.registrationStatus && last.registrationStatus !== 'paiement_en_attente') {
+    clearPendingPayment();
+    panel.hidden = false;
+    panel.innerHTML = `
+      <div class="hero-pill" style="background:rgba(196,154,55,.2);color:#674b12">⚠️ Dossier expiré</div>
+      <h2>Ce dossier n'est plus disponible</h2>
+      <p>Les dossiers dont le paiement n'est pas terminé sont supprimés au bout de 48 h. Vous pouvez recommencer votre inscription : vos informations saisies sont conservées dans ce navigateur, seuls les documents sont à joindre à nouveau.</p>
+      <div class="success-actions" style="margin-top:18px">
+        <button type="button" class="btn primary" id="new-registration-button">Recommencer mon inscription</button>
+      </div>
+    `;
+    panel.querySelector('#new-registration-button')?.addEventListener('click', startNewRegistration);
+    return;
+  }
+
+  const intro = {
+    cancel: 'Vous avez quitté la page de paiement HelloAsso avant d\'avoir payé.',
+    error: 'HelloAsso a signalé une erreur pendant le paiement.',
+    resume: 'Votre dossier est bien enregistré, mais son paiement n\'est pas terminé.',
+    pending: 'Votre dossier est bien enregistré, mais son paiement n\'a pas été finalisé.',
+  }[reason] || 'Le paiement de votre dossier n\'est pas terminé.';
+  const noPayment = last ? ' Nous n\'avons enregistré aucun paiement pour ce dossier.' : '';
+  const count = [1, 2, 3].includes(Number(last?.installmentCount)) ? Number(last.installmentCount) : 1;
+  const option = (n) => `<option value="${n}"${n === count ? ' selected' : ''}>Paiement en ${n} fois</option>`;
+
+  panel.hidden = false;
+  panel.innerHTML = `
+    <div class="hero-pill" style="background:rgba(196,154,55,.2);color:#674b12">⏳ Paiement non terminé</div>
+    <h2>Reprenez votre paiement</h2>
+    <p>${intro}${noPayment}</p>
+    <p><strong>Vous n'avez rien à ressaisir :</strong> votre dossier et vos documents sont conservés 48 h.</p>
+    <div class="form-grid two" style="margin-top:16px">
+      <label class="field">
+        <span>Règlement HelloAsso</span>
+        <select id="resume-installments">${option(1)}${option(2)}${option(3)}</select>
+        <small>Paiement refusé par votre banque ? Confirmez l'opération dans l'application de votre banque (3-D Secure), essayez une autre carte, ou choisissez un paiement en 2 ou 3 fois.</small>
+      </label>
+    </div>
+    <div class="alert" id="resume-alert" hidden style="margin-top:14px"></div>
+    <div class="success-note">
+      📋 <strong>Référence de votre dossier :</strong> ${registrationId}<br>
+      En cas de difficulté, contactez le club en indiquant cette référence.
+    </div>
+    <div class="success-actions" style="margin-top:18px">
+      <button type="button" class="btn primary" id="resume-pay-button">Reprendre mon paiement</button>
+      <button type="button" class="btn" id="new-registration-button">Nouvelle inscription</button>
+    </div>
+  `;
+  panel.querySelector('#resume-pay-button')?.addEventListener('click', () => resumePayment(panel, registrationId));
+  panel.querySelector('#new-registration-button')?.addEventListener('click', startNewRegistration);
+}
+
+// Crée un nouveau lien de paiement pour un dossier déjà enregistré, puis y redirige.
+async function resumePayment(panel, registrationId) {
+  const btn = panel.querySelector('#resume-pay-button');
+  const alertEl = panel.querySelector('#resume-alert');
+  const select = panel.querySelector('#resume-installments');
+  const showError = (message) => {
+    if (!alertEl) return;
+    alertEl.textContent = message || '';
+    alertEl.hidden = !message;
+  };
+
+  showError('');
+  if (btn) { btn.disabled = true; btn.textContent = 'Ouverture de HelloAsso…'; }
+
+  try {
+    const res = await fetch(RESUME_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ registrationId, installmentCount: Number(select?.value || 1) }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || data?.error) throw new Error(data?.error || `Erreur serveur (${res.status})`);
+
+    const result = data?.data || {};
+    if (result.paid) {
+      // Une tentative précédente avait en réalité été payée : rien à repayer.
+      showCheckingPanel(panel);
+      const { confirmed, last } = await pollPayment(registrationId, 5);
+      if (confirmed) showPaymentSuccess(panel, confirmed);
+      else showPaymentPending(g('signup-form'), panel, registrationId, last);
+      return;
+    }
+    if (!result.helloAssoUrl) {
+      throw new Error('Lien de paiement HelloAsso non reçu. Veuillez réessayer ou contacter le club.');
+    }
+
+    try { sessionStorage.setItem('affbc_reg_id', registrationId); } catch (e) { /* ignore */ }
+    setPendingPayment(registrationId);
+    window.location.href = result.helloAssoUrl;
+  } catch (err) {
+    showError(err instanceof TypeError
+      ? 'Erreur de connexion. Vérifiez votre réseau puis réessayez.'
+      : (err.message || 'Une erreur est survenue. Veuillez réessayer.'));
+    if (btn) { btn.disabled = false; btn.textContent = 'Reprendre mon paiement'; }
+  }
 }
 
 // Expose pour le bouton "Vérifier à nouveau"
@@ -1564,7 +1796,23 @@ async function init() {
   // 1. Charger la config
   await loadConfig();
 
-  // 1bis. Si les inscriptions sont fermées, on affiche le bandeau et on
+  // Page restaurée depuis le cache « retour/avancer » du navigateur (retour
+  // depuis HelloAsso avec le bouton précédent) : l'état JS d'avant la
+  // redirection (bouton grisé « Envoi en cours… ») n'a plus de sens, on recharge.
+  window.addEventListener('pageshow', (event) => { if (event.persisted) window.location.reload(); });
+
+  await loadTarifs();
+
+  // 2. Vérifier si on revient de HelloAsso, ou si ce navigateur a un dossier
+  // dont le paiement n'est pas terminé. Traité AVANT l'état « inscriptions
+  // fermées » : quelqu'un qui a déjà envoyé son dossier doit toujours pouvoir
+  // voir sa confirmation ou terminer son paiement.
+  const handled = await handleHelloAssoReturn();
+  if (handled) return;
+  const pendingHandled = await handlePendingPaymentOnLoad();
+  if (pendingHandled) return;
+
+  // 2bis. Si les inscriptions sont fermées, on affiche le bandeau et on
   // n'initialise rien d'autre (pas de formulaire, pas de handlers de
   // soumission) : c'est une mesure d'UX, la vraie protection est côté
   // serveur dans /api/public/inscription (POST).
@@ -1572,12 +1820,6 @@ async function init() {
     applyClosedState();
     return;
   }
-
-  await loadTarifs();
-
-  // 2. Vérifier si on revient de HelloAsso
-  const handled = await handleHelloAssoReturn();
-  if (handled) return;
 
   // 3. Rendre le QS et les commandes
   renderQsGrid();

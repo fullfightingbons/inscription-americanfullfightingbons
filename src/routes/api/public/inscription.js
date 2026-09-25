@@ -433,6 +433,15 @@ async function getHelloAssoToken(env) {
   return data.access_token;
 }
 
+/**
+ * Origine publique canonique du site d'inscription (sans slash final).
+ * Partagée entre la création du checkout HelloAsso (URLs de retour) et le lien
+ * « reprendre mon paiement » des e-mails.
+ */
+export function getPublicOrigin(env) {
+  return String(env?.PUBLIC_ORIGIN || "https://inscription.americanfullfightingbons.fr").replace(/\/+$/, "");
+}
+
 export async function createHelloAssoCheckout(env, payload, totals, registrationId) {
   if (!env.HELLOASSO_CLIENT_ID || !env.HELLOASSO_CLIENT_SECRET || !env.HELLOASSO_ORGANIZATION_SLUG) {
     throw new Error("HelloAsso n'est pas configuré (variables d'environnement manquantes).");
@@ -445,7 +454,7 @@ export async function createHelloAssoCheckout(env, payload, totals, registration
   payload.payment = { ...(payload.payment || {}), installmentCount: installmentPlan.installmentCount, schedule: installmentPlan.schedule };
 
   const token = await getHelloAssoToken(env);
-  const origin = String(env.PUBLIC_ORIGIN || "https://inscription.americanfullfightingbons.fr").replace(/\/+$/, "");
+  const origin = getPublicOrigin(env);
 
   const firstName = String(payload.identity?.firstName || "").trim();
   const lastName  = String(payload.identity?.lastName  || "").trim();
@@ -479,8 +488,13 @@ export async function createHelloAssoCheckout(env, payload, totals, registration
     totalAmount:   amountCents,
     initialAmount: installmentPlan.initialAmount,
     itemName: `Inscription AFFBC — ${firstName} ${lastName}`.trim(),
-    backUrl:   `${origin}/?helloasso=cancel`,
-    errorUrl:  `${origin}/?helloasso=cancel`,
+    // Les trois URLs portent la référence du dossier (`ref`) : au retour, le
+    // navigateur peut ainsi retrouver le dossier déjà enregistré et proposer de
+    // reprendre le paiement sans tout ressaisir. `cancel` (flèche retour) et
+    // `error` (erreur technique HelloAsso, qui ajoute `checkoutIntentId` et
+    // `error` à cette URL) sont distingués pour afficher un message adapté.
+    backUrl:   `${origin}/?helloasso=cancel&ref=${registrationId}`,
+    errorUrl:  `${origin}/?helloasso=error&ref=${registrationId}`,
     returnUrl: `${origin}/?helloasso=success&ref=${registrationId}`,
     containsDonation: false,
     payer: {
@@ -492,7 +506,9 @@ export async function createHelloAssoCheckout(env, payload, totals, registration
       city:      String(payload.contact?.city     || "").trim()    || undefined,
       zipCode:   String(payload.contact?.postalCode|| "").trim()   || undefined,
       country:   "FRA",
-      companyName: env.APP_NAME || "AFFBC",
+      // Pas de `companyName` : il était renseigné avec le nom du club lui-même
+      // (« AFFBC »), ce qui présentait le payeur comme rattaché à l'association
+      // bénéficiaire du paiement. Champ optionnel côté HelloAsso.
     },
     metadata: {
       registrationId,
@@ -577,7 +593,7 @@ function buildEmailText(payload, totals, registrationId, helloAssoUrl) {
 
 // ─── Email de confirmation à l'adhérent ──────────────────────────────────────
 
-function buildConfirmationEmailHtml(payload, totals, registrationId) {
+export function buildConfirmationEmailHtml(payload, totals, registrationId, resumeUrl = "") {
   const identity = payload.identity || {};
   const contact  = payload.contact  || {};
   const practice = payload.practice || {};
@@ -595,12 +611,13 @@ function buildConfirmationEmailHtml(payload, totals, registrationId) {
     <p><strong>Paiement :</strong> HelloAsso (${count} fois${count === 1 ? "" : " prévues"})</p>
     <hr>
     <p>Votre dossier sera validé après confirmation du paiement HelloAsso. Vous recevrez votre licence FFK une fois le dossier complet.</p>
+    ${resumeUrl ? `<p><strong>Votre paiement n'est pas terminé ?</strong> Vous pouvez le reprendre pendant 48 h sans ressaisir votre dossier : <a href="${resumeUrl}">reprendre mon paiement</a>.</p>` : ""}
     <p>En cas de question : <a href="mailto:fullfightingbons@gmail.com">fullfightingbons@gmail.com</a></p>
     <p style="color:#888;font-size:12px">AMERICAN FULL FIGHTING BONS EN CHABLAIS — 15 Place Henri Boucher, 74890 Bons En Chablais</p>
   </body></html>`.trim();
 }
 
-function buildConfirmationEmailText(payload, totals, registrationId) {
+export function buildConfirmationEmailText(payload, totals, registrationId, resumeUrl = "") {
   const identity = payload.identity || {};
   const practice = payload.practice || {};
   const count    = normalizeInstallmentCount(payload.payment?.installmentCount);
@@ -616,6 +633,8 @@ function buildConfirmationEmailText(payload, totals, registrationId) {
     `Paiement : HelloAsso (${count} fois${count === 1 ? "" : " prévues"})`,
     "",
     "Votre dossier sera validé après confirmation du paiement HelloAsso.",
+    ...(resumeUrl ? ["", `Votre paiement n'est pas terminé ? Reprenez-le pendant 48 h sans ressaisir votre dossier : ${resumeUrl}`] : []),
+    "",
     "En cas de question : fullfightingbons@gmail.com",
   ].join("\n");
 }
@@ -627,6 +646,7 @@ async function sendConfirmationEmail(env, payload, totals, registrationId) {
   const from    = env.SIGNUP_ALERT_FROM || "contact@americanfullfightingbons.fr";
   const identity = payload.identity || {};
   const subject  = "Confirmation de votre inscription AFFBC";
+  const resumeUrl = `${getPublicOrigin(env)}/?helloasso=resume&ref=${encodeURIComponent(registrationId)}`;
 
   const response = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
@@ -635,8 +655,8 @@ async function sendConfirmationEmail(env, payload, totals, registrationId) {
       sender: { name: env.SIGNUP_ALERT_SENDER_NAME || "AFFBC Inscriptions", email: from },
       to: [{ email: adherentEmail, name: `${escapeMime(identity.firstName)} ${escapeMime(identity.lastName)}`.trim() }],
       subject,
-      htmlContent: buildConfirmationEmailHtml(payload, totals, registrationId),
-      textContent: buildConfirmationEmailText(payload, totals, registrationId),
+      htmlContent: buildConfirmationEmailHtml(payload, totals, registrationId, resumeUrl),
+      textContent: buildConfirmationEmailText(payload, totals, registrationId, resumeUrl),
     }),
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });

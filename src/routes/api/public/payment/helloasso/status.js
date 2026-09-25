@@ -876,7 +876,7 @@ export async function onRequestGet(context) {
     const totals = dossier.computedTotals || {};
 
     // ── Vérification de l'état HelloAsso ─────────────────────────────────────
-    const checkoutIntentId =
+    let checkoutIntentId =
     normalizeCheckoutIntentId(
       registration.helloasso_checkout_intent_id ||
       dossier.payment?.helloAssoCheckoutIntentId,
@@ -887,14 +887,46 @@ export async function onRequestGet(context) {
     }
 
     const organizationSlug = context.env.HELLOASSO_ORGANIZATION_SLUG;
-    const intent = await helloAssoRequest(
+    const fetchCheckoutIntent = (intentId) => helloAssoRequest(
       context.env,
-      `/organizations/${encodeURIComponent(organizationSlug)}/checkout-intents/${encodeURIComponent(checkoutIntentId)}`,
-                                          "GET",
+      `/organizations/${encodeURIComponent(organizationSlug)}/checkout-intents/${encodeURIComponent(intentId)}`,
+      "GET",
     );
 
-    const order = intent.order || null;
-    const paymentSnapshot = buildPaymentSnapshot(order, dossier, checkoutIntentId);
+    let intent = await fetchCheckoutIntent(checkoutIntentId);
+    let order = intent.order || null;
+    let paymentSnapshot = buildPaymentSnapshot(order, dossier, checkoutIntentId);
+
+    // ── Tentatives de paiement précédentes ───────────────────────────────────
+    // Quand l'adhérent reprend son paiement (POST .../helloasso/resume), un
+    // NOUVEAU checkout est créé et l'ancien identifiant est conservé dans
+    // `payment.previousCheckoutIntentIds`. Si le paiement a en réalité abouti
+    // sur un ancien lien (onglet resté ouvert, lien de l'e-mail…), il faut le
+    // retrouver ici : sinon l'adhérent serait débité sans que son dossier soit
+    // jamais finalisé.
+    if (!paymentSnapshot.hasInitialPayment) {
+      const previousIds = Array.isArray(dossier.payment?.previousCheckoutIntentIds)
+        ? dossier.payment.previousCheckoutIntentIds.map(normalizeCheckoutIntentId).filter(Boolean)
+        : [];
+      for (const previousId of previousIds) {
+        if (previousId === checkoutIntentId) continue;
+        try {
+          const previousIntent = await fetchCheckoutIntent(previousId);
+          const previousOrder = previousIntent?.order || null;
+          const previousSnapshot = buildPaymentSnapshot(previousOrder, dossier, previousId);
+          if (previousSnapshot.hasInitialPayment) {
+            intent = previousIntent;
+            order = previousOrder;
+            paymentSnapshot = previousSnapshot;
+            checkoutIntentId = previousId;
+            break;
+          }
+        } catch (previousError) {
+          console.warn("[helloasso/status] checkout précédent illisible :", previousId, previousError?.message || previousError);
+        }
+      }
+    }
+
     const paid = paymentSnapshot.hasInitialPayment;
     const paidAmount = Number(paymentSnapshot.paidAmountCents || 0) / 100;
     const paidAt =
@@ -910,6 +942,9 @@ export async function onRequestGet(context) {
           paid: false,
           fullyPaid: false,
           registrationId,
+          // Statut du dossier (ex. "paiement_en_attente", "abandonnee") : permet
+          // au navigateur de savoir si le paiement peut encore être repris.
+          registrationStatus: registration.statut || null,
           adherentId: null,
           installmentCount: paymentSnapshot.installmentCount,
           paidInstallments: paymentSnapshot.paidInstallments,

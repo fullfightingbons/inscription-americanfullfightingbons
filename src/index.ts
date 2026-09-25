@@ -22,6 +22,7 @@ import { onRequestGet as getAdherentEligibility } from "./routes/api/public/adhe
 import { onRequestPost as postInscription } from "./routes/api/public/inscription.js";
 import { onRequestGet as getHelloAssoStatus } from "./routes/api/public/payment/helloasso/status.js";
 import { onRequestPost as postHelloAssoNotification } from "./routes/api/public/payment/helloasso/notification.js";
+import { onRequestPost as postHelloAssoResume } from "./routes/api/public/payment/helloasso/resume.js";
 import { onRequestGet as getTarifs } from "./routes/api/public/tarifs";
 import { handleCleanupCron } from "./routes/cron/cleanup-abandoned.js";
 
@@ -167,6 +168,10 @@ async function routeApi(request: Request, env: Env, pathname: string): Promise<R
 
   if (pathname === "/api/public/payment/helloasso/notification" && request.method === "POST") {
     return postHelloAssoNotification(context);
+  }
+
+  if (pathname === "/api/public/payment/helloasso/resume" && request.method === "POST") {
+    return postHelloAssoResume(context);
   }
 
   if (pathname === "/api/public/tarifs" && request.method === "GET") {

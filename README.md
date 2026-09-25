@@ -16,6 +16,7 @@ Application publique d'inscription pour `inscription.americanfullfightingbons.fr
 - `src/routes/api/public/inscription-config.js` : configuration publique du formulaire
 - `src/routes/api/public/inscription.js` : création du dossier + session HelloAsso
 - `src/routes/api/public/payment/helloasso/status.js` : validation du paiement et finalisation métier
+- `src/routes/api/public/payment/helloasso/resume.js` : reprise du paiement d'un dossier déjà enregistré (nouveau checkout)
 - `migrations/` : schéma D1
 
 ## Pré-requis
@@ -118,6 +119,17 @@ Le reçu est un fichier **séparé** du récapitulatif pour que l'adhérent puis
 
 Secret Cloudflare : `BREVO_API_KEY` (sans lui, aucun e-mail n'est envoyé).
 
+## Retour depuis HelloAsso et reprise du paiement
+
+Le lien de paiement HelloAsso n'est valable que **15 minutes**. Un adhérent peut quitter la page à tout moment (flèche retour, erreur technique, refus bancaire / 3-D Secure, onglet fermé). Le dossier et les pièces jointes sont alors déjà enregistrés (statut `paiement_en_attente`) et **conservés 48 h** avant purge par le cron (`cron/cleanup-abandoned.js`).
+
+- Les trois URLs de retour envoyées à HelloAsso portent la référence du dossier : `/?helloasso=success&ref=…` (paiement), `/?helloasso=cancel&ref=…` (flèche retour), `/?helloasso=error&ref=…` (erreur technique ; HelloAsso y ajoute `checkoutIntentId` et `error`).
+- Au retour sans paiement, le navigateur vérifie d'abord si le paiement n'a pas abouti malgré tout, puis affiche « Reprenez votre paiement » avec un bouton qui appelle `POST /api/public/payment/helloasso/resume`. Rien n'est à ressaisir ni à renvoyer.
+- Le brouillon du formulaire n'est effacé qu'une fois le paiement **confirmé**. Le dossier en attente est mémorisé dans le navigateur (`localStorage`, clé `affbc_pending_payment`) : à la visite suivante, l'état du dossier est vérifié avant d'afficher un formulaire vierge (évite aussi de payer deux fois).
+- L'e-mail de réception du dossier contient un lien de reprise : `/?helloasso=resume&ref=<id du dossier>`. Le club peut aussi l'envoyer à la main à un adhérent bloqué (l'id est dans `inscriptions_publiques`), tant que le dossier est en `paiement_en_attente`.
+- Côté serveur, `resume.js` : (1) refuse un dossier expiré (`abandonnee`) ; (2) **vérifie d'abord qu'aucune tentative précédente n'a été payée** (via `status.js`, qui finalise alors le dossier) et refuse d'ouvrir un second paiement si HelloAsso est injoignable ; (3) crée un nouveau checkout à partir du dossier stocké (l'adhérent peut changer le nombre d'échéances) ; (4) garde l'ancien identifiant dans `dossier_json.payment.previousCheckoutIntentIds`, que `status.js` relit pour retrouver un paiement fait sur un ancien lien. Plafond : 8 reprises par dossier.
+- Ce traitement passe **avant** l'état « inscriptions fermées » : quelqu'un qui a déjà envoyé son dossier peut toujours terminer son paiement.
+
 ## URLs publiques
 
 - `/` : formulaire d'inscription
@@ -126,6 +138,7 @@ Secret Cloudflare : `BREVO_API_KEY` (sans lui, aucun e-mail n'est envoyé).
 - `/api/public/inscription` : soumission du dossier
 - `/api/public/payment/helloasso/status` : vérification du paiement HelloAsso
 - `/api/public/payment/helloasso/notification` : webhook HelloAsso `Order` / `Payment`
+- `/api/public/payment/helloasso/resume` : reprise du paiement d'un dossier en attente (`POST`, JSON `{ registrationId, installmentCount? }`)
 
 ## URL admin optionnelle
 
