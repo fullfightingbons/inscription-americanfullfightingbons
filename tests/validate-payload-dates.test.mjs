@@ -35,6 +35,7 @@ function buildPayload(overrides = {}) {
     identity: {
       lastName: "Dupont",
       firstName: "Jean",
+      sexe: "M",
       birthDate: isoDate(-30 * YEAR_DAYS),
       birthPlace: "Thonon-les-Bains",
       ...overrides.identity,

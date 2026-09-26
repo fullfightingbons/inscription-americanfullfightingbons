@@ -155,6 +155,7 @@ function applyDraft(data) {
     else el.value = v;
   };
   set('lastName', data.lastName); set('firstName', data.firstName);
+  set('sexe', data.sexe);
   set('birthDate', data.birthDate); set('birthPlace', data.birthPlace);
   set('address1', data.address1); set('address2', data.address2);
   set('postalCode', data.postalCode); set('city', data.city);
@@ -341,6 +342,7 @@ function updateClothingAvailability() {
 function collectAllFields() {
   return {
     lastName: val('lastName'), firstName: val('firstName'),
+    sexe: val('sexe'),
     birthDate: val('birthDate'), birthPlace: val('birthPlace'),
     address1: val('address1'), address2: val('address2'),
     postalCode: val('postalCode'), city: val('city'),
@@ -778,6 +780,7 @@ function validateStep(step) {
     case 1: { // Identité
       if (!val('lastName')) return 'Le nom est obligatoire.';
       if (!val('firstName')) return 'Le prénom est obligatoire.';
+      if (!val('sexe')) return 'Le sexe est obligatoire.';
       if (!val('birthDate')) return 'La date de naissance est obligatoire.';
       const birthDateError = computeDateFieldErrors().birthDate;
       if (birthDateError) return birthDateError;
@@ -1203,6 +1206,7 @@ function buildPayload() {
     identity: {
       lastName: val('lastName'),
       firstName: val('firstName'),
+      sexe: val('sexe'),
       birthDate: val('birthDate'),
       birthPlace: val('birthPlace'),
     },

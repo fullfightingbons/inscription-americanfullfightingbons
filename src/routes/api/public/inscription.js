@@ -316,6 +316,10 @@ export function validatePayload(payload) {
 
   requireText(identity.lastName,  "Nom");
   requireText(identity.firstName, "Prénom");
+  requireText(identity.sexe,      "Sexe");
+  if (!["F", "M"].includes(String(identity.sexe || "").trim().toUpperCase())) {
+    throw new Error("Sexe invalide");
+  }
   requireText(identity.birthPlace,"Lieu de naissance");
   requireText(contact.address1,   "Adresse");
   requireText(contact.postalCode, "Code postal");

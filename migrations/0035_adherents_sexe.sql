@@ -1,0 +1,30 @@
+-- ⚠️ Fichier IDENTIQUE (même nom, même contenu) à
+-- inscription-americanfullfightingbons/migrations/0035_adherents_sexe.sql
+--
+-- Les workers AFFBC partagent une seule base D1 (affbc-production), mais
+-- chaque dépôt a son propre dossier migrations/ et donc sa propre
+-- numérotation (cf. commentaire de 0015_adherent_inscription_pdf.sql pour
+-- le détail du mécanisme). On garde donc ce fichier à l'identique dans les
+-- deux dépôts : `wrangler d1 migrations apply` suit les migrations déjà
+-- exécutées par nom de fichier dans la table d1_migrations, qui vit DANS la
+-- base D1 elle-même — donc partagée. Le premier des deux dépôts déployé en
+-- production applique réellement l'ALTER TABLE ; le second le verra déjà
+-- appliqué (même nom) et l'ignorera sans erreur "duplicate column name".
+--
+-- Ajoute le sexe du pratiquant sur la fiche adhérent :
+--  - collecté à l'inscription en ligne, étape "Identité" (worker inscription,
+--    public/index.html + public/assets/inscription.js), transmis au worker via
+--    payload.identity.sexe, et écrit sur la fiche adhérent à la création
+--    (src/routes/_lib/free-registration.js pour le tarif gratuit "Membres du
+--    Bureau", src/routes/api/public/payment/helloasso/status.js pour le
+--    paiement HelloAsso standard) ;
+--  - modifiable manuellement depuis la fiche adhérent du worker gestion
+--    (utile pour les adhérents créés avant cette migration ou importés
+--    depuis DoliAsso, qui n'ont pas encore cette information).
+--
+-- Valeurs attendues : 'F' (Féminin) ou 'M' (Masculin), ou NULL si non
+-- renseigné (fiches existantes au moment de la migration). Pas de contrainte
+-- CHECK en base, cohérent avec le reste du schéma "adherents" (aucune autre
+-- colonne texte n'en porte) : la validation se fait côté formulaire
+-- (<select>) et côté Worker (validatePayload).
+ALTER TABLE adherents ADD COLUMN sexe TEXT;

@@ -185,6 +185,7 @@ async function upsertAdherent(db, payload, totals, exercise) {
     id: adherentId,
     nom: String(identity.lastName || "").trim().toUpperCase(),
     prenom: String(identity.firstName || "").trim(),
+    sexe: String(identity.sexe || "").trim().toUpperCase() || existing?.sexe || null,
     naissance: identity.birthDate,
     email: String(contact.email || "").trim().toLowerCase(),
     telephone: `${contact.phonePrimary || ""} / ${contact.phoneSecondary || ""}`.trim(),
