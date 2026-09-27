@@ -639,6 +639,11 @@ function updateConditionals() {
   const formula = val('formulaCode');
   const needProof = formula === 'pro' || formula === 'cse_thales';
   document.querySelectorAll('[data-show-when="proofNeeded"]').forEach(el => el.hidden = !needProof);
+  // Aide contextuelle sur les justificatifs acceptés : liste différente selon
+  // qu'on est sur le tarif pro (plusieurs types de justificatifs possibles)
+  // ou le tarif CSE Thalès (un seul document précis, l'attestation employeur).
+  document.querySelectorAll('[data-show-when="proofPro"]').forEach(el => el.hidden = formula !== 'pro');
+  document.querySelectorAll('[data-show-when="proofCseThales"]').forEach(el => el.hidden = formula !== 'cse_thales');
 
   const familyNote = document.getElementById('family-rate-note');
   if (familyNote) familyNote.hidden = formula !== 'family';
