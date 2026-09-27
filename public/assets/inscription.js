@@ -795,16 +795,25 @@ function validateStep(step) {
       return null;
     }
     case 2: { // Coordonnées
+      // Même motif que les attributs pattern= du HTML (postalCode, phonePrimary,
+      // etc.) : ce formulaire est piloté en JS (boutons type="button"), donc ces
+      // pattern= HTML5 ne sont jamais réellement appliqués sans ce miroir en JS.
+      const PHONE_PATTERN = /^[0-9+][0-9 .]{8,14}$/;
       if (!val('address1')) return 'L\'adresse est obligatoire.';
       if (!val('address2')) return 'Le complément d\'adresse est obligatoire (indiquez Néant si aucun).';
       if (!val('postalCode')) return 'Le code postal est obligatoire.';
+      if (!/^\d{5}$/.test(val('postalCode'))) return 'Le code postal doit contenir exactement 5 chiffres.';
       if (!val('city')) return 'La ville est obligatoire.';
       if (!val('phonePrimary')) return 'Le téléphone principal est obligatoire.';
+      if (!PHONE_PATTERN.test(val('phonePrimary'))) return 'Le téléphone principal ne semble pas valide (ex : 0612345678).';
+      if (val('phoneSecondary') && !PHONE_PATTERN.test(val('phoneSecondary'))) return 'Le téléphone secondaire ne semble pas valide (ex : 0612345678).';
       if (!val('email')) return 'L\'email est obligatoire.';
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val('email'))) return 'L\'email semble invalide.';
       if (!val('emergencyLastName')) return 'Le nom du contact d\'urgence est obligatoire.';
       if (!val('emergencyFirstName')) return 'Le prénom du contact d\'urgence est obligatoire.';
       if (!val('emergencyPhonePrimary')) return 'Le téléphone principal du contact d\'urgence est obligatoire.';
+      if (!PHONE_PATTERN.test(val('emergencyPhonePrimary'))) return 'Le téléphone principal du contact d\'urgence ne semble pas valide (ex : 0612345678).';
+      if (val('emergencyPhoneSecondary') && !PHONE_PATTERN.test(val('emergencyPhoneSecondary'))) return 'Le téléphone secondaire du contact d\'urgence ne semble pas valide (ex : 0612345678).';
       return null;
     }
     case 3: { // Pratique
