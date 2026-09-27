@@ -1810,6 +1810,23 @@ async function loadTarifs() {
 }
 
 async function init() {
+  // 0. Bouton effacer le brouillon : attaché en tout premier, avant les
+  // branches à sortie anticipée (retour HelloAsso, paiement en attente,
+  // inscriptions fermées) qui font `return` plus bas. Le bouton vit dans
+  // .form-toolbar, en dehors de <form id="signup-form">, donc il reste
+  // visible même quand le formulaire est masqué (form.hidden = true) — s'il
+  // n'était attaché qu'à la fin de init(), ces branches le laisseraient
+  // visible mais inerte (aucun listener posé).
+  const clearBtn = g('clear-draft-button');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      if (confirm('Effacer le brouillon et recommencer depuis le début ?')) {
+        clearDraft();
+        location.reload();
+      }
+    });
+  }
+
   // 1. Charger la config
   await loadConfig();
 
@@ -1908,17 +1925,6 @@ async function init() {
   // 8. Soumission du formulaire
   const form = g('signup-form');
   if (form) form.addEventListener('submit', submitForm);
-
-  // 9. Bouton effacer le brouillon
-  const clearBtn = g('clear-draft-button');
-  if (clearBtn) {
-    clearBtn.addEventListener('click', () => {
-      if (confirm('Effacer le brouillon et recommencer depuis le début ?')) {
-        clearDraft();
-        location.reload();
-      }
-    });
-  }
 
   // 10. Mise à jour initiale
   updateConditionals();
