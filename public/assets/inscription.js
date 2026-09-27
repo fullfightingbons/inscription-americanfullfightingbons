@@ -800,7 +800,6 @@ function validateStep(step) {
       // pattern= HTML5 ne sont jamais réellement appliqués sans ce miroir en JS.
       const PHONE_PATTERN = /^[0-9+][0-9 .]{8,14}$/;
       if (!val('address1')) return 'L\'adresse est obligatoire.';
-      if (!val('address2')) return 'Le complément d\'adresse est obligatoire (indiquez Néant si aucun).';
       if (!val('postalCode')) return 'Le code postal est obligatoire.';
       if (!/^\d{5}$/.test(val('postalCode'))) return 'Le code postal doit contenir exactement 5 chiffres.';
       if (!val('city')) return 'La ville est obligatoire.';
