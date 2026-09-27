@@ -28,6 +28,12 @@ const RESUME_URL = '/api/public/payment/helloasso/resume'; // POST — backend r
 // sont conservés 48 h côté serveur, puis purgés par le cron).
 const PENDING_KEY = 'affbc_pending_payment';
 const PENDING_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+// Doit rester identique à MAX_FILE_SIZE côté serveur
+// (src/routes/api/public/inscription.js) : sans ce miroir, un justificatif
+// trop lourd n'est détecté qu'après l'upload complet vers le serveur, qui le
+// rejette alors — frustrant sur réseau mobile, en particulier en toute fin de
+// parcours (étape 8) pour un fichier choisi dès l'étape 3 ou 4.
+const MAX_FILE_SIZE_BYTES = 8 * 1024 * 1024; // 8 Mo
 const REGISTRATION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const QS_QUESTIONS = [
   { key: 'familyCardiacDeath', label: 'Un membre de ta famille est-il décédé subitement d\'une cause cardiaque avant 50 ans ?' },
@@ -779,6 +785,19 @@ function canNavigateToStep(targetStep) {
 
 // ─── Validation par étape ─────────────────────────────────────────────────────
 
+// Vérifie la taille d'un champ fichier déjà rempli : renvoie un message
+// d'erreur si le fichier dépasse MAX_FILE_SIZE_BYTES, sinon null. N'appelle
+// jamais ceci sur un champ vide/optionnel non rempli : à faire uniquement
+// après avoir déjà vérifié la présence du fichier quand il est obligatoire.
+function checkFileSize(inputId, label) {
+  const file = g(inputId)?.files?.[0];
+  if (!file) return null;
+  if (file.size > MAX_FILE_SIZE_BYTES) {
+    return `${label} dépasse 8 Mo (${Math.round(file.size / 1024 / 1024)} Mo). Choisissez un fichier plus léger.`;
+  }
+  return null;
+}
+
 function validateStep(step) {
   setAlert('');
   switch (step) {
@@ -827,11 +846,15 @@ function validateStep(step) {
         if (!val('passRegionDossierNumber')) return 'Le numéro de dossier Pass Région est obligatoire.';
         const doc = g('passRegionDocument');
         if (!doc?.files?.length) return 'Le justificatif Pass Région est obligatoire.';
+        const passRegionSizeError = checkFileSize('passRegionDocument', 'Le justificatif Pass Région');
+        if (passRegionSizeError) return passRegionSizeError;
       }
       const formula = val('formulaCode');
       if (formula === 'pro' || formula === 'cse_thales') {
         const proof = g('proProofDocument');
         if (!proof?.files?.length) return 'Le justificatif de tarif réduit est obligatoire.';
+        const proofSizeError = checkFileSize('proProofDocument', 'Le justificatif de tarif réduit');
+        if (proofSizeError) return proofSizeError;
       }
       if (isMinor(val('birthDate'))) {
         if (!val('legalLastName')) return 'Le nom du représentant légal est obligatoire.';
@@ -857,6 +880,8 @@ function validateStep(step) {
       if (minor || qsPositive) {
         const cert = g('medicalCertificate');
         if (!cert?.files?.length) return 'Le certificat médical est obligatoire pour votre profil.';
+        const certSizeError = checkFileSize('medicalCertificate', 'Le certificat médical');
+        if (certSizeError) return certSizeError;
       }
       return null;
     }
