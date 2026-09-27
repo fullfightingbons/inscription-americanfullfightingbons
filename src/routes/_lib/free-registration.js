@@ -21,7 +21,7 @@
  * log d'audit, pas par une fausse écriture comptable.
  */
 
-import { isMinor, findActiveExercise, seasonLabelFromExercise } from "./helpers.js";
+import { isMinor, findActiveExercise, seasonLabelFromExercise, normalizeNameForComparison, normalizeDateForComparison, normalizeEmail } from "./helpers.js";
 import { generateAdherentPdfWithAttachments, fetchPhotoDocument } from "./pdf.js";
 import {
   buildAdditionalOrderSyncItems,
@@ -39,40 +39,47 @@ function getActiveExerciseDate(endDate) {
   return `${year}-06-30`;
 }
 
-async function findMatchingAdherent(db, payload) {
+// Comparaison faite en JS (et non en SQL) pour ignorer casse et accents des
+// deux côtés — SQLite/D1 n'a pas de fonction UPPER/LOWER Unicode sans
+// extension ICU, donc "Laurent" et "LAURENT" ne matchaient pas via
+// `nom = ? AND prenom = ?` en SQL strict. C'est ce qui a permis, en
+// pratique, qu'un adhérent ayant retapé son prénom en majuscules d'une
+// saison à l'autre se retrouve avec une deuxième fiche au lieu d'une mise à
+// jour de l'existante (cf. onglet Adhérents > Doublons côté gestion, incident
+// du 26/09/2026). Mêmes fonctions de normalisation que findMatchingAdherent
+// dans inscription.js (éligibilité renouvellement) et checkBlacklist — la
+// dérive entre plusieurs implémentations ad hoc du même contrôle est
+// justement ce qui a causé le bug initial. Un club reste d'une taille
+// raisonnable pour filtrer côté application sans souci de performance.
+export async function findMatchingAdherent(db, payload) {
   const identity = payload?.identity || {};
   const contact = payload?.contact || {};
-  const nom = String(identity.lastName || "").trim().toUpperCase();
-  const prenom = String(identity.firstName || "").trim();
-  const birthDate = String(identity.birthDate || "").trim();
-  const email = String(contact.email || "").trim().toLowerCase();
+  const nom = normalizeNameForComparison(identity.lastName);
+  const prenom = normalizeNameForComparison(identity.firstName);
+  const birthDate = normalizeDateForComparison(identity.birthDate);
+  const email = normalizeEmail(contact.email);
   if (!nom || !prenom || !birthDate) return null;
 
+  const { results } = await db
+    .prepare(`SELECT * FROM adherents ORDER BY updated_at DESC, created_at DESC`)
+    .all();
+  const rows = results || [];
+  const matchesIdentity = (a) =>
+    normalizeNameForComparison(a.nom) === nom &&
+    normalizeNameForComparison(a.prenom) === prenom &&
+    normalizeDateForComparison(a.naissance) === birthDate;
+
   if (email) {
-    const exactMatches = await db
-      .prepare(
-        `SELECT *
-        FROM adherents
-        WHERE nom = ? AND prenom = ? AND naissance = ? AND lower(email) = lower(?)
-        ORDER BY updated_at DESC, created_at DESC
-        LIMIT 1`,
-      )
-      .bind(nom, prenom, birthDate, email)
-      .all();
-    if (exactMatches?.results?.[0]) return exactMatches.results[0];
+    const byEmail = rows.find((a) => matchesIdentity(a) && normalizeEmail(a.email) === email);
+    if (byEmail) return byEmail;
   }
 
-  const fallbackMatches = await db
-    .prepare(
-      `SELECT *
-      FROM adherents
-      WHERE nom = ? AND prenom = ? AND naissance = ?
-      ORDER BY updated_at DESC, created_at DESC
-      LIMIT 2`,
-    )
-    .bind(nom, prenom, birthDate)
-    .all();
-  const candidates = fallbackMatches?.results || [];
+  // Repli : si l'email a changé depuis la dernière inscription (cas réaliste
+  // d'une saison à l'autre), nom + prénom + date de naissance restent une
+  // signature suffisamment spécifique pour identifier la même personne. On
+  // ne l'utilise QUE s'il existe exactement une fiche correspondante, pour
+  // éviter de matcher la mauvaise personne en cas d'homonymie.
+  const candidates = rows.filter(matchesIdentity);
   return candidates.length === 1 ? candidates[0] : null;
 }
 

@@ -13,7 +13,7 @@
 
 import { badRequest, json } from "../../_lib/data.js";
 import { getClientIp, writeAuditLog } from "../../_lib/audit.js";
-import { isMinor, calculateTotals, toBool, normalizeInstallmentCount, findActiveExercise } from "../../_lib/helpers.js";
+import { isMinor, calculateTotals, toBool, normalizeInstallmentCount, findActiveExercise, normalizeNameForComparison, normalizeDateForComparison, normalizeEmail } from "../../_lib/helpers.js";
 import {
   assertAdditionalOrderItemsStock,
   assertClothingOrderStock,
@@ -705,7 +705,6 @@ async function sendSignupAlert(env, payload, totals, registrationId, helloAssoUr
 // ─── Base de données ──────────────────────────────────────────────────────────
 
 function normalizePersonName(value) { return String(value || "").trim(); }
-function normalizeEmail(value)      { return String(value || "").trim().toLowerCase(); }
 function hasBureauDiscipline(discipline) { return String(discipline || "").toLowerCase().includes("membre du bureau"); }
 
 // Le nom/prénom stocké peut contenir des accents (Héloïse, Danaï...). SQLite
@@ -717,36 +716,6 @@ function hasBureauDiscipline(discipline) { return String(discipline || "").toLow
 // autre forme Unicode de composition — courant selon le clavier/appareil).
 // On normalise donc en supprimant les diacritiques avant de comparer,
 // exactement comme pour les dates ci-dessous.
-function normalizeNameForComparison(value) {
-  return String(value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .toUpperCase();
-}
-
-// La date envoyée par le formulaire public est toujours au format ISO strict
-// YYYY-MM-DD (imposé par requireDate + <input type="date">). En revanche, la
-// date stockée pour un adhérent existant (adherent.naissance) peut provenir
-// d'un import CSV historique ou d'une saisie ancienne et ne pas être
-// exactement dans ce format (séparateurs différents, année sur 2 chiffres,
-// espace en trop...). Une comparaison stricte de chaînes fait alors échouer
-// un renouvellement légitime avec "la date de naissance ne correspond pas",
-// même quand il s'agit bien de la même date. On normalise donc les deux
-// valeurs avant de comparer.
-function normalizeDateForComparison(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (iso) return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
-  const fr = raw.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
-  if (fr) {
-    const year = fr[3].length === 2 ? `20${fr[3]}` : fr[3];
-    return `${year}-${fr[2].padStart(2, "0")}-${fr[1].padStart(2, "0")}`;
-  }
-  return raw;
-}
-
 async function findMatchingAdherent(db, payload) {
   const nom      = normalizeNameForComparison(payload.identity?.lastName);
   const prenom   = normalizeNameForComparison(payload.identity?.firstName);

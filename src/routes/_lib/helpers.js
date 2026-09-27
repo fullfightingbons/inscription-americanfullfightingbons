@@ -23,6 +23,59 @@ export function normalizeInstallmentCount(value) {
 }
 
 /**
+ * Comparaison de nom/prénom insensible à la casse et aux accents. À utiliser
+ * partout où il faut reconnaître une même personne d'une saisie à l'autre
+ * sans dépendre d'une frappe identique au caractère près.
+ *
+ * Centralisée ici après l'incident du 26/09/2026 : findMatchingAdherent
+ * (free-registration.js et payment/helloasso/status.js — la fonction qui
+ * crée/retrouve la fiche adhérent à l'inscription) comparait nom/prénom par
+ * égalité SQL stricte, alors que findMatchingAdherent d'inscription.js
+ * (utilisée pour l'éligibilité au tarif Bureau) et checkBlacklist
+ * utilisaient déjà cette normalisation. Un adhérent ayant saisi son prénom
+ * "Laurent" une saison puis "LAURENT" la suivante n'était donc pas reconnu
+ * comme la même personne : une deuxième fiche était créée au lieu de mettre
+ * à jour l'existante, qui restait "Actif" avec une date de fin d'adhésion
+ * périmée (cf. onglet Adhérents > Doublons côté gestion, et le garde-fou
+ * équivalent dans checkAdhesionsExpirees côté gestion/src/index.ts). Les
+ * trois usages passent maintenant par cette même fonction pour ne plus
+ * jamais diverger.
+ */
+export function normalizeNameForComparison(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toUpperCase();
+}
+
+/**
+ * Normalise une date de naissance en YYYY-MM-DD avant comparaison. Le
+ * formulaire public envoie toujours un format ISO strict (imposé par
+ * requireDate + <input type="date">), mais la valeur déjà stockée pour un
+ * adhérent existant peut provenir d'une saisie ancienne ou d'un import CSV
+ * historique et ne pas être exactement dans ce format (séparateurs
+ * différents, année sur 2 chiffres, espace en trop...). Une comparaison
+ * stricte de chaînes ferait alors échouer un rapprochement légitime.
+ */
+export function normalizeDateForComparison(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
+  const fr = raw.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (fr) {
+    const year = fr[3].length === 2 ? `20${fr[3]}` : fr[3];
+    return `${year}-${fr[2].padStart(2, "0")}-${fr[1].padStart(2, "0")}`;
+  }
+  return raw;
+}
+
+export function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+/**
  * Retourne l'exercice comptable actif (statut = 'actif'), ou à défaut le plus
  * récent. Utilisé à la fois lors de la soumission d'inscription et lors de la
  * confirmation de paiement — d'où sa centralisation ici.
