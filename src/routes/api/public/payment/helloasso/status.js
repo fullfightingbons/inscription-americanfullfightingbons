@@ -356,11 +356,24 @@ async function insertJournalEntryPair(db, entries) {
   }
 }
 
-async function replaceJournalEntryGroup(db, pieceBase, entries) {
-  await db
-  .prepare(`DELETE FROM journal_comptable WHERE piece = ? OR piece LIKE ?`)
-  .bind(pieceBase, `${pieceBase}-%`)
-  .run();
+// `exerciceId` est optionnel. Non fourni (undefined) : comportement historique,
+// suppression de toute la famille de pièces `pieceBase` — correct pour les
+// pièces propres à UNE inscription (VTE-<facture>, etc.). Fourni (y compris
+// null = "sans exercice") : la suppression est cantonnée à cet exercice, pour
+// les pièces dérivées d'un identifiant qui SURVIT d'une saison à l'autre
+// (ADH-<adhérent>) — voir insertCotisationJournal.
+async function replaceJournalEntryGroup(db, pieceBase, entries, { exerciceId } = {}) {
+  if (exerciceId === undefined) {
+    await db
+    .prepare(`DELETE FROM journal_comptable WHERE piece = ? OR piece LIKE ?`)
+    .bind(pieceBase, `${pieceBase}-%`)
+    .run();
+  } else {
+    await db
+    .prepare(`DELETE FROM journal_comptable WHERE (piece = ? OR piece LIKE ?) AND exercice_id IS ?`)
+    .bind(pieceBase, `${pieceBase}-%`, exerciceId)
+    .run();
+  }
   await insertJournalEntryPair(db, entries);
 }
 
@@ -427,16 +440,34 @@ async function upsertHelloAssoPaymentJournal(db, registrationId, adherentId, nom
   return pieceBase;
 }
 
-async function insertCotisationJournal(db, adherentId, nom, prenom, totals, exercise, paidAt) {
+export async function insertCotisationJournal(db, adherentId, nom, prenom, totals, exercise, paidAt) {
   if (!Number(totals.cotisation || 0)) return null;
   const now = new Date().toISOString();
   const dateOp = String(paidAt || now).slice(0, 10);
-  // L'id adhérent reste identique d'une saison à l'autre (cf. findMatchingAdherent,
-  // incident du 26/09/2026) : sans l'exercice dans la clé, replaceJournalEntryGroup
-  // supprimait l'écriture de cotisation de la saison précédente à chaque renouvellement.
-  // Séparateur "_" (pas "-") : normalizePieceGroupKey côté gestion (public/assets/app.js)
-  // attend un unique segment sans tiret entre le préfixe ADH- et le suffixe -CLI/-COT.
-  const piece = `ADH-${String(adherentId).slice(0, 8)}_${String(exercise?.id || "NA").slice(0, 8)}`;
+  // Clé de pièce : dérivée du SEUL adherentId (ADH-<8 premiers caractères>),
+  // volontairement SANS exercice. Ce format est un contrat implicite avec
+  // gestion : normalizePieceGroupKey (public/assets/app.js) le décompose via
+  // /^((?:ADH|ACH|PAY|SUB|VTE)-[^-]+)-([A-Z]{2,4}\d*)$/ pour regrouper les
+  // lignes CLI + COT d'une même cotisation et contrôler leur équilibre. Y
+  // ajouter un segment d'exercice (ADH-<adhérent>-<exercice>-CLI) sépare les
+  // deux lignes en deux groupes déséquilibrés et fait apparaître de fausses
+  // alertes d'équilibre à chaque renouvellement — vérifié sur le vrai code
+  // de gestion. Ne pas modifier sans adapter ce parseur (cf. test de
+  // contrat dans gestion/test/gl-accounting.test.ts).
+  //
+  // Le vrai défaut à corriger est ailleurs. Un même adhérent conserve le
+  // même id d'une saison à l'autre (un renouvellement met à jour la fiche
+  // existante au lieu d'en créer une nouvelle — cf. findMatchingAdherent),
+  // donc la même clé revient à chaque saison. Or replaceJournalEntryGroup —
+  // dont le but est d'éviter une double écriture si ce statut de paiement
+  // est revérifié plusieurs fois pour LA MÊME inscription — supprimait
+  // toute la famille de pièces `ADH-<adhérent>-*`, écritures de la SAISON
+  // PRÉCÉDENTE comprises, y compris pour un exercice déjà clôturé (incident
+  // découvert le 27/09/2026 : le journal ne reflétait plus, pour un adhérent
+  // ayant renouvelé, que la cotisation de sa dernière saison). On cantonne
+  // donc la suppression à l'exercice de cette inscription : la remplacer
+  // reste idempotent, mais les exercices précédents ne sont plus touchés.
+  const piece = `ADH-${String(adherentId).slice(0, 8)}`;
   const labelName = `${nom} ${prenom}`.trim();
   const common = {
     date_op: dateOp,
@@ -467,7 +498,7 @@ async function insertCotisationJournal(db, adherentId, nom, prenom, totals, exer
                                debit: 0,
                                credit: Number(totals.cotisation || 0),
     },
-  ]);
+  ], { exerciceId: exercise?.id || null });
 
   return piece;
 }
@@ -563,9 +594,7 @@ async function insertPassRegionJournal(db, adherentId, nom, prenom, totals, exer
   if (!amount) return null;
   const now = new Date().toISOString();
   const dateOp = String(paidAt || now).slice(0, 10);
-  // Même correctif que insertCotisationJournal ci-dessus, même cause : le Pass
-  // Région d'un adhérent renouvelé écrasait celui de la saison précédente.
-  const piece = `SUB-${String(adherentId).slice(0, 8)}_${String(exercise?.id || "NA").slice(0, 8)}`;
+  const piece = `SUB-${String(adherentId).slice(0, 8)}`;
   const labelName = `${nom} ${prenom}`.trim();
   const common = {
     date_op: dateOp,

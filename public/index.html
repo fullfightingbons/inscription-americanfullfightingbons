@@ -246,7 +246,7 @@
               </label>
               <label class="field field-full">
                 <span>Complément d'adresse</span>
-                <input id="address2" autocomplete="address-line2" placeholder="Optionnel">
+                <input id="address2" autocomplete="address-line2" required placeholder="Si aucun, indiquez Néant">
               </label>
               <label class="field">
                 <span>Code postal</span>
@@ -365,53 +365,13 @@
               <input id="passRegionDossierNumber" inputmode="text" placeholder="Exemple : PR-2025-00123">
               <small>Le numéro de dossier Pass Région est obligatoire si le Pass Région est utilisé.</small>
               </label>
-              <div class="field-full conditional" data-show-when="passRegion">
-                <details class="size-guide">
-                  <summary>
-                    <span class="sg-icon">🪪</span>
-                    <span class="sg-label">Où trouver le code et le numéro de dossier Pass Région ?</span>
-                    <span class="sg-chevron">▸</span>
-                  </summary>
-                  <div class="size-guide-body">
-                    <p class="size-guide-note">Le <strong>code à 4 chiffres</strong> est le code d'utilisation défini pour votre carte Pass'Région, consultable dans votre espace bénéficiaire (site ou application Pass'Région).</p>
-                    <p class="size-guide-note">Le <strong>numéro de dossier</strong> est la référence de votre demande Pass'Région, également visible dans cet espace bénéficiaire.</p>
-                    <p class="size-guide-src">Besoin de les retrouver ? Connectez-vous sur <a href="https://www.auvergnerhonealpes.fr/passregion" target="_blank" rel="noopener">auvergnerhonealpes.fr/passregion</a>.</p>
-                  </div>
-                </details>
-              </div>
               <label class="field conditional" data-show-when="proofNeeded">
                 <span>Justificatif tarif réduit</span>
                 <input id="proProofDocument" type="file" accept="application/pdf,image/*">
-                <small>PDF ou image, 8 Mo maximum.</small>
               </label>
-              <div class="field-full conditional" data-show-when="proofPro">
-                <details class="size-guide">
-                  <summary>
-                    <span class="sg-icon">💼</span>
-                    <span class="sg-label">Quels justificatifs sont acceptés pour le tarif pro ?</span>
-                    <span class="sg-chevron">▸</span>
-                  </summary>
-                  <div class="size-guide-body">
-                    <p class="size-guide-note">Un seul de ces documents suffit : carte professionnelle, carte militaire ou de gendarme, attestation de l'autorité hiérarchique (employeur), ou tout justificatif équivalent attestant de votre situation professionnelle.</p>
-                  </div>
-                </details>
-              </div>
-              <div class="field-full conditional" data-show-when="proofCseThales">
-                <details class="size-guide">
-                  <summary>
-                    <span class="sg-icon">🏢</span>
-                    <span class="sg-label">Quel justificatif pour le tarif CSE Thalès ?</span>
-                    <span class="sg-chevron">▸</span>
-                  </summary>
-                  <div class="size-guide-body">
-                    <p class="size-guide-note">L'attestation employeur Thales suffit comme justificatif.</p>
-                  </div>
-                </details>
-              </div>
               <label class="field conditional field-full" data-show-when="passRegion">
                 <span>Justificatif Pass Région</span>
                 <input id="passRegionDocument" type="file" accept="application/pdf,image/*">
-                <small>Prenez en photo ou scannez votre carte Pass'Région (recto lisible). PDF ou image, 8 Mo maximum.</small>
               </label>
             </div>
 
@@ -472,9 +432,7 @@
               <label class="field field-full">
                 <span>Certificat médical / certificat compétition</span>
                 <input id="medicalCertificate" type="file" accept="application/pdf,image/*">
-                <small>PDF ou image, 8 Mo maximum.</small>
               </label>
-              <div class="info-banner">Pour rappel, un certificat médical reste valable <strong>3 ans</strong>, sauf évolution de l'état de santé du pratiquant depuis sa délivrance — dans ce cas, un nouveau certificat est nécessaire même si les 3 ans ne sont pas écoulés.</div>
             </div>
             <div class="panel-actions">
               <button type="button" class="btn" data-prev>Retour</button>

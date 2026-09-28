@@ -28,12 +28,6 @@ const RESUME_URL = '/api/public/payment/helloasso/resume'; // POST — backend r
 // sont conservés 48 h côté serveur, puis purgés par le cron).
 const PENDING_KEY = 'affbc_pending_payment';
 const PENDING_MAX_AGE_MS = 48 * 60 * 60 * 1000;
-// Doit rester identique à MAX_FILE_SIZE côté serveur
-// (src/routes/api/public/inscription.js) : sans ce miroir, un justificatif
-// trop lourd n'est détecté qu'après l'upload complet vers le serveur, qui le
-// rejette alors — frustrant sur réseau mobile, en particulier en toute fin de
-// parcours (étape 8) pour un fichier choisi dès l'étape 3 ou 4.
-const MAX_FILE_SIZE_BYTES = 8 * 1024 * 1024; // 8 Mo
 const REGISTRATION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const QS_QUESTIONS = [
   { key: 'familyCardiacDeath', label: 'Un membre de ta famille est-il décédé subitement d\'une cause cardiaque avant 50 ans ?' },
@@ -645,11 +639,6 @@ function updateConditionals() {
   const formula = val('formulaCode');
   const needProof = formula === 'pro' || formula === 'cse_thales';
   document.querySelectorAll('[data-show-when="proofNeeded"]').forEach(el => el.hidden = !needProof);
-  // Aide contextuelle sur les justificatifs acceptés : liste différente selon
-  // qu'on est sur le tarif pro (plusieurs types de justificatifs possibles)
-  // ou le tarif CSE Thalès (un seul document précis, l'attestation employeur).
-  document.querySelectorAll('[data-show-when="proofPro"]').forEach(el => el.hidden = formula !== 'pro');
-  document.querySelectorAll('[data-show-when="proofCseThales"]').forEach(el => el.hidden = formula !== 'cse_thales');
 
   const familyNote = document.getElementById('family-rate-note');
   if (familyNote) familyNote.hidden = formula !== 'family';
@@ -785,19 +774,6 @@ function canNavigateToStep(targetStep) {
 
 // ─── Validation par étape ─────────────────────────────────────────────────────
 
-// Vérifie la taille d'un champ fichier déjà rempli : renvoie un message
-// d'erreur si le fichier dépasse MAX_FILE_SIZE_BYTES, sinon null. N'appelle
-// jamais ceci sur un champ vide/optionnel non rempli : à faire uniquement
-// après avoir déjà vérifié la présence du fichier quand il est obligatoire.
-function checkFileSize(inputId, label) {
-  const file = g(inputId)?.files?.[0];
-  if (!file) return null;
-  if (file.size > MAX_FILE_SIZE_BYTES) {
-    return `${label} dépasse 8 Mo (${Math.round(file.size / 1024 / 1024)} Mo). Choisissez un fichier plus léger.`;
-  }
-  return null;
-}
-
 function validateStep(step) {
   setAlert('');
   switch (step) {
@@ -814,24 +790,16 @@ function validateStep(step) {
       return null;
     }
     case 2: { // Coordonnées
-      // Même motif que les attributs pattern= du HTML (postalCode, phonePrimary,
-      // etc.) : ce formulaire est piloté en JS (boutons type="button"), donc ces
-      // pattern= HTML5 ne sont jamais réellement appliqués sans ce miroir en JS.
-      const PHONE_PATTERN = /^[0-9+][0-9 .]{8,14}$/;
       if (!val('address1')) return 'L\'adresse est obligatoire.';
+      if (!val('address2')) return 'Le complément d\'adresse est obligatoire (indiquez Néant si aucun).';
       if (!val('postalCode')) return 'Le code postal est obligatoire.';
-      if (!/^\d{5}$/.test(val('postalCode'))) return 'Le code postal doit contenir exactement 5 chiffres.';
       if (!val('city')) return 'La ville est obligatoire.';
       if (!val('phonePrimary')) return 'Le téléphone principal est obligatoire.';
-      if (!PHONE_PATTERN.test(val('phonePrimary'))) return 'Le téléphone principal ne semble pas valide (ex : 0612345678).';
-      if (val('phoneSecondary') && !PHONE_PATTERN.test(val('phoneSecondary'))) return 'Le téléphone secondaire ne semble pas valide (ex : 0612345678).';
       if (!val('email')) return 'L\'email est obligatoire.';
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val('email'))) return 'L\'email semble invalide.';
       if (!val('emergencyLastName')) return 'Le nom du contact d\'urgence est obligatoire.';
       if (!val('emergencyFirstName')) return 'Le prénom du contact d\'urgence est obligatoire.';
       if (!val('emergencyPhonePrimary')) return 'Le téléphone principal du contact d\'urgence est obligatoire.';
-      if (!PHONE_PATTERN.test(val('emergencyPhonePrimary'))) return 'Le téléphone principal du contact d\'urgence ne semble pas valide (ex : 0612345678).';
-      if (val('emergencyPhoneSecondary') && !PHONE_PATTERN.test(val('emergencyPhoneSecondary'))) return 'Le téléphone secondaire du contact d\'urgence ne semble pas valide (ex : 0612345678).';
       return null;
     }
     case 3: { // Pratique
@@ -846,15 +814,11 @@ function validateStep(step) {
         if (!val('passRegionDossierNumber')) return 'Le numéro de dossier Pass Région est obligatoire.';
         const doc = g('passRegionDocument');
         if (!doc?.files?.length) return 'Le justificatif Pass Région est obligatoire.';
-        const passRegionSizeError = checkFileSize('passRegionDocument', 'Le justificatif Pass Région');
-        if (passRegionSizeError) return passRegionSizeError;
       }
       const formula = val('formulaCode');
       if (formula === 'pro' || formula === 'cse_thales') {
         const proof = g('proProofDocument');
         if (!proof?.files?.length) return 'Le justificatif de tarif réduit est obligatoire.';
-        const proofSizeError = checkFileSize('proProofDocument', 'Le justificatif de tarif réduit');
-        if (proofSizeError) return proofSizeError;
       }
       if (isMinor(val('birthDate'))) {
         if (!val('legalLastName')) return 'Le nom du représentant légal est obligatoire.';
@@ -880,8 +844,6 @@ function validateStep(step) {
       if (minor || qsPositive) {
         const cert = g('medicalCertificate');
         if (!cert?.files?.length) return 'Le certificat médical est obligatoire pour votre profil.';
-        const certSizeError = checkFileSize('medicalCertificate', 'Le certificat médical');
-        if (certSizeError) return certSizeError;
       }
       return null;
     }
@@ -1835,23 +1797,6 @@ async function loadTarifs() {
 }
 
 async function init() {
-  // 0. Bouton effacer le brouillon : attaché en tout premier, avant les
-  // branches à sortie anticipée (retour HelloAsso, paiement en attente,
-  // inscriptions fermées) qui font `return` plus bas. Le bouton vit dans
-  // .form-toolbar, en dehors de <form id="signup-form">, donc il reste
-  // visible même quand le formulaire est masqué (form.hidden = true) — s'il
-  // n'était attaché qu'à la fin de init(), ces branches le laisseraient
-  // visible mais inerte (aucun listener posé).
-  const clearBtn = g('clear-draft-button');
-  if (clearBtn) {
-    clearBtn.addEventListener('click', () => {
-      if (confirm('Effacer le brouillon et recommencer depuis le début ?')) {
-        clearDraft();
-        location.reload();
-      }
-    });
-  }
-
   // 1. Charger la config
   await loadConfig();
 
@@ -1950,6 +1895,17 @@ async function init() {
   // 8. Soumission du formulaire
   const form = g('signup-form');
   if (form) form.addEventListener('submit', submitForm);
+
+  // 9. Bouton effacer le brouillon
+  const clearBtn = g('clear-draft-button');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      if (confirm('Effacer le brouillon et recommencer depuis le début ?')) {
+        clearDraft();
+        location.reload();
+      }
+    });
+  }
 
   // 10. Mise à jour initiale
   updateConditionals();

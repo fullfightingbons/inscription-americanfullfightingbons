@@ -60,34 +60,6 @@ function requireEmail(value) {
   return clean;
 }
 
-function requirePostalCode(value, label) {
-  const clean = requireText(value, label);
-  if (!/^\d{5}$/.test(clean)) throw new Error(`${label} doit contenir exactement 5 chiffres`);
-  return clean;
-}
-
-// Même motif que l'attribut pattern= des champs tel du formulaire web
-// (public/assets/inscription.js) : le serveur ne doit jamais faire confiance
-// à la validation du client, donc ce miroir est nécessaire même si le client
-// vérifie déjà le format.
-const PHONE_PATTERN = /^[0-9+][0-9 .]{8,14}$/;
-
-function requirePhone(value, label) {
-  const clean = requireText(value, label);
-  if (!PHONE_PATTERN.test(clean)) throw new Error(`${label} ne semble pas valide`);
-  return clean;
-}
-
-// Téléphones facultatifs : on ne bloque pas s'ils sont absents, mais on
-// vérifie le format dès qu'une valeur est fournie (sinon une saisie invalide
-// passerait silencieusement, y compris pour le contact d'urgence).
-function optionalPhone(value, label) {
-  const clean = String(value || "").trim();
-  if (!clean) return undefined;
-  if (!PHONE_PATTERN.test(clean)) throw new Error(`${label} ne semble pas valide`);
-  return clean;
-}
-
 function fileExtension(name = "") {
   const clean = String(name || "");
   const index = clean.lastIndexOf(".");
@@ -350,15 +322,15 @@ export function validatePayload(payload) {
   }
   requireText(identity.birthPlace,"Lieu de naissance");
   requireText(contact.address1,   "Adresse");
-  requirePostalCode(contact.postalCode, "Code postal");
+  requireText(contact.postalCode, "Code postal");
   requireText(contact.city,       "Ville");
-  requirePhone(contact.phonePrimary,  "Téléphone principal");
-  optionalPhone(contact.phoneSecondary, "Téléphone secondaire"); // optionnel : on ne bloque pas si absent, mais on vérifie le format s'il est fourni
+  requireText(contact.phonePrimary,  "Téléphone principal");
+  // phoneSecondary optionnel : on ne bloque pas si absent
   requireEmail(contact.email);
   requireText(emergency.lastName,  "Nom du contact d'urgence");
   requireText(emergency.firstName, "Prénom du contact d'urgence");
-  requirePhone(emergency.phonePrimary,  "Téléphone principal du contact d'urgence");
-  optionalPhone(emergency.phoneSecondary, "Téléphone secondaire du contact d'urgence"); // optionnel, idem
+  requireText(emergency.phonePrimary,  "Téléphone principal du contact d'urgence");
+  // emergencyPhoneSecondary optionnel
   requireText(practice.typeInscription,"Type d'inscription");
   requireText(practice.practiceType,   "Type de pratique");
   requireText(practice.formulaCode,    "Formule tarifaire");
