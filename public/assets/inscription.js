@@ -1065,21 +1065,21 @@ function renderClothingOrder() {
             <span class="sg-chevron">▸</span>
           </summary>
           <div class="size-guide-body">
-            <p class="size-guide-note">Mesurez votre <strong>tour de poitrine</strong> (sous les aisselles) avec un mètre ruban.</p>
+            <p class="size-guide-note">Mesurez votre <strong>tour de poitrine</strong> (sous les aisselles) avec un mètre ruban et choisissez une taille dont le tour de poitrine est supérieur au vôtre. Les cotes ci-dessous sont celles du <strong>t-shirt</strong> (et non du corps).</p>
             <table class="size-guide-table">
-              <thead><tr><th>Taille</th><th>Tour de poitrine (cm)</th><th>Longueur (cm)</th></tr></thead>
+              <thead><tr><th>Taille</th><th>Tour de poitrine du t-shirt (cm)</th><th>Longueur (cm)</th></tr></thead>
               <tbody>
-                <tr><td><span class="sz-badge">XS</span></td><td>80 – 88</td><td>66</td></tr>
-                <tr><td><span class="sz-badge">S</span></td><td>88 – 96</td><td>69</td></tr>
-                <tr><td><span class="sz-badge">M</span></td><td>96 – 104</td><td>72</td></tr>
-                <tr><td><span class="sz-badge">L</span></td><td>104 – 112</td><td>74</td></tr>
-                <tr><td><span class="sz-badge">XL</span></td><td>112 – 120</td><td>76</td></tr>
-                <tr><td><span class="sz-badge">XXL</span></td><td>120 – 128</td><td>78</td></tr>
-                <tr><td><span class="sz-badge">XXXL</span></td><td>128 – 136</td><td>80</td></tr>
-                <tr><td><span class="sz-badge">XXXXL</span></td><td>136 – 144</td><td>82</td></tr>
+                <tr><td><span class="sz-badge">XS</span></td><td>94</td><td>68</td></tr>
+                <tr><td><span class="sz-badge">S</span></td><td>100</td><td>70</td></tr>
+                <tr><td><span class="sz-badge">M</span></td><td>106</td><td>72</td></tr>
+                <tr><td><span class="sz-badge">L</span></td><td>112</td><td>74</td></tr>
+                <tr><td><span class="sz-badge">XL</span></td><td>118</td><td>76</td></tr>
+                <tr><td><span class="sz-badge">XXL</span></td><td>124</td><td>78</td></tr>
+                <tr><td><span class="sz-badge">XXXL</span></td><td>130</td><td>80</td></tr>
+                <tr><td><span class="sz-badge">XXXXL</span></td><td>140</td><td>82</td></tr>
               </tbody>
             </table>
-            <p class="size-guide-src">En cas de doute, choisissez la taille supérieure.</p>
+            <p class="size-guide-src">Tolérance ± 2 cm. En cas de doute, choisissez la taille supérieure. Source : <a href="https://www.decathlonpro.fr/tee-shirt-mixte-190-noir-id-8568037.html" target="_blank" rel="noopener">Decathlon Pro – Tee shirt mixte B&amp;C 190 Noir</a> (fiche B&amp;C #E190)</p>
           </div>
         </details>
       </div>
