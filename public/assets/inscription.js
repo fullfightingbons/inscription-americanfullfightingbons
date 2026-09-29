@@ -290,7 +290,7 @@ const SIZE_UNAVAILABLE = "Ma taille n'est pas disponible";
 function getClothingSizeOptions(kind) {
   const entry = getClothingStockEntry(kind);
   if (entry?.sizes?.length) return entry.sizes;
-  return ['XS', 'S', 'M', 'L', 'XL'];
+  return ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL'];
 }
 
 function getClothingSizeStock(kind, size) {
@@ -1075,6 +1075,8 @@ function renderClothingOrder() {
                 <tr><td><span class="sz-badge">L</span></td><td>104 – 112</td><td>74</td></tr>
                 <tr><td><span class="sz-badge">XL</span></td><td>112 – 120</td><td>76</td></tr>
                 <tr><td><span class="sz-badge">XXL</span></td><td>120 – 128</td><td>78</td></tr>
+                <tr><td><span class="sz-badge">XXXL</span></td><td>128 – 136</td><td>80</td></tr>
+                <tr><td><span class="sz-badge">XXXXL</span></td><td>136 – 144</td><td>82</td></tr>
               </tbody>
             </table>
             <p class="size-guide-src">En cas de doute, choisissez la taille supérieure.</p>
