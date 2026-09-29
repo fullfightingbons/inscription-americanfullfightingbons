@@ -22,6 +22,7 @@ const ADHERENT_ELIGIBILITY_URL = '/api/public/adherent-eligibility';
 const SUBMIT_URL = '/api/public/inscription/'; // POST — backend inscription.js
 const STATUS_URL = '/api/public/payment/helloasso/status'; // GET — backend status.js
 const TARIFS_URL = '/api/public/tarifs';
+const COMMUNE_URL = '/api/public/commune'; // GET ?cp=XXXXX — backend commune.js
 const RESUME_URL = '/api/public/payment/helloasso/resume'; // POST — backend resume.js
 // Dossier envoyé mais dont le paiement n'est pas confirmé : mémorisé dans ce
 // navigateur pour proposer de reprendre le paiement (les dossiers non payés
@@ -613,6 +614,56 @@ function scheduleBureauEligibilityRefresh() {
   }, 250);
 }
 
+let postalCodeLookupTimer = null;
+let lastPostalCodeLookup = '';
+
+// Suggestion de ville à partir du code postal (cf. commune.js côté serveur —
+// jamais d'appel direct à une API tierce depuis le navigateur, la CSP du
+// site l'interdit). Ne se déclenche qu'une fois les 5 chiffres saisis.
+function schedulePostalCodeLookup() {
+  const postalCode = val('postalCode');
+  if (!/^\d{5}$/.test(postalCode)) return;
+  if (postalCodeLookupTimer) window.clearTimeout(postalCodeLookupTimer);
+  postalCodeLookupTimer = window.setTimeout(() => refreshCityFromPostalCode(postalCode), 300);
+}
+
+async function refreshCityFromPostalCode(postalCode) {
+  if (postalCode === lastPostalCodeLookup) return; // évite un aller-retour identique en boucle
+  lastPostalCodeLookup = postalCode;
+
+  const datalist = g('city-suggestions');
+  if (!datalist) return;
+
+  let communes = [];
+  try {
+    const res = await fetch(`${COMMUNE_URL}?cp=${encodeURIComponent(postalCode)}`, { cache: 'no-store' });
+    const payload = await res.json().catch(() => null);
+    communes = Array.isArray(payload?.data?.communes) ? payload.data.communes : [];
+  } catch (e) {
+    // Hors-ligne, requête interrompue... : la ville reste une saisie libre,
+    // aucune information n'est perdue.
+    return;
+  }
+
+  // Constructions DOM directes (pas d'innerHTML) : évite tout risque
+  // d'injection depuis un nom de commune, même si la source est fiable.
+  datalist.textContent = '';
+  for (const nom of communes) {
+    const option = document.createElement('option');
+    option.value = nom;
+    datalist.appendChild(option);
+  }
+
+  // Ne préremplit que si le champ Ville est encore vide et qu'une seule
+  // commune correspond : ne jamais écraser une saisie ou un choix déjà fait,
+  // y compris si la personne revient modifier le code postal après coup.
+  const cityField = g('city');
+  if (cityField && !cityField.value.trim() && communes.length === 1) {
+    cityField.value = communes[0];
+  }
+}
+
+
 // ─── Affichages conditionnels ─────────────────────────────────────────────────
 
 function updateConditionals() {
@@ -740,6 +791,7 @@ function showStep(index) {
     panel.classList.toggle('active', i === index);
   });
   currentStep = index;
+  if (index === 7) prefillPayerIfEmpty();
   renderStepList();
   renderProgress();
   updateConditionals();
@@ -747,6 +799,24 @@ function showStep(index) {
   setAlert('');
   window.scrollTo({ top: 0, behavior: 'smooth' });
   focusStepHeading(index);
+}
+
+// Étape "Paiement" (data-step="7") : le nom du payeur est presque toujours
+// celui de l'adhérent (ou de son représentant légal si mineur — c'est en
+// pratique le parent qui paie), pourtant il fallait le retaper à chaque
+// fois. On ne préremplit QUE si les deux champs sont encore vides, pour ne
+// jamais écraser une saisie déjà faite (retour en arrière depuis l'étape
+// suivante, ou payeur volontairement différent de l'adhérent — un tiers qui
+// règle pour quelqu'un d'autre, par exemple).
+function prefillPayerIfEmpty() {
+  if (val('payerFirstName') || val('payerLastName')) return;
+  const minor = isMinor(val('birthDate'));
+  const firstName = minor ? val('legalFirstName') : val('firstName');
+  const lastName = minor ? val('legalLastName') : val('lastName');
+  const firstNameEl = g('payerFirstName');
+  const lastNameEl = g('payerLastName');
+  if (firstName && firstNameEl) firstNameEl.value = firstName;
+  if (lastName && lastNameEl) lastNameEl.value = lastName;
 }
 
 // Déplace le focus clavier/lecteur d'écran vers le titre de l'étape affichée.
@@ -791,7 +861,6 @@ function validateStep(step) {
     }
     case 2: { // Coordonnées
       if (!val('address1')) return 'L\'adresse est obligatoire.';
-      if (!val('address2')) return 'Le complément d\'adresse est obligatoire (indiquez Néant si aucun).';
       if (!val('postalCode')) return 'Le code postal est obligatoire.';
       if (!val('city')) return 'La ville est obligatoire.';
       if (!val('phonePrimary')) return 'Le téléphone principal est obligatoire.';
@@ -1588,6 +1657,36 @@ async function handlePendingPaymentOnLoad() {
   return false;
 }
 
+// Champs "foyer" repris pour inscrire un autre membre de la famille à la
+// suite : adresse, téléphones, email et contact d'urgence sont presque
+// toujours partagés par tous les enfants d'une même famille — les ressaisir
+// à chaque inscription était la friction la plus citée. Tout le reste
+// (identité, pratique, questionnaire de santé, photo, tarification,
+// représentant légal, consentements, signatures, moyen de paiement) reste
+// propre à CHAQUE personne inscrite et ne doit jamais être repris
+// automatiquement.
+const FAMILY_SHARED_FIELDS = [
+  'address1', 'address2', 'postalCode', 'city',
+  'phonePrimary', 'phoneSecondary', 'email',
+  'emergencyLastName', 'emergencyFirstName', 'emergencyPhonePrimary', 'emergencyPhoneSecondary',
+];
+
+// Le formulaire reste dans le DOM (juste masqué) au moment où l'écran de
+// succès s'affiche : collectAllFields() lit donc encore les valeurs qui
+// viennent d'être saisies, même après le clearDraft() de
+// showPaymentSuccess() (qui ne touche que le localStorage, pas le DOM).
+function startFamilyMemberRegistration() {
+  const current = collectAllFields();
+  const shared = {};
+  for (const key of FAMILY_SHARED_FIELDS) {
+    if (current[key]) shared[key] = current[key];
+  }
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({ step: 0, data: shared, familyMember: true, ts: Date.now() }));
+  } catch (e) { /* au pire, le formulaire repart simplement vierge */ }
+  window.location.reload();
+}
+
 function showPaymentSuccess(panel, paymentData = null) {
   clearDraft();
   clearPendingPayment();
@@ -1607,9 +1706,11 @@ function showPaymentSuccess(panel, paymentData = null) {
       📧 Le club a été notifié par email. N'hésitez pas à les contacter si vous avez des questions.
     </div>
     <div class="success-actions" style="margin-top:18px">
+      <button type="button" class="btn primary" id="family-member-button">👪 Inscrire un autre membre de la famille</button>
       <button type="button" class="btn" onclick="window.location.reload()">Déposer une autre inscription</button>
     </div>
   `;
+  panel.querySelector('#family-member-button')?.addEventListener('click', startFamilyMemberRegistration);
 }
 
 function showPaymentPending(form, panel, registrationId, paymentData = null) {
@@ -1849,7 +1950,9 @@ async function init() {
       const alert = g('draft-alert');
       if (alert) {
         alert.hidden = false;
-        alert.textContent = 'Un brouillon a été restauré. Vérifiez vos informations avant de continuer.';
+        alert.textContent = draft.familyMember
+          ? 'Adresse, téléphones, email et contact d\'urgence repris de l\'inscription précédente : vérifiez-les, puis complétez l\'identité de ce nouveau membre.'
+          : 'Un brouillon a été restauré. Vérifiez vos informations avant de continuer.';
       }
     }
   }
@@ -1891,6 +1994,8 @@ async function init() {
   document.addEventListener('change', () => { updateConditionals(); updateSummary(); updateDateFieldErrors(); });
   document.addEventListener('input', scheduleBureauEligibilityRefresh);
   document.addEventListener('change', scheduleBureauEligibilityRefresh);
+  const postalCodeField = g('postalCode');
+  if (postalCodeField) postalCodeField.addEventListener('input', schedulePostalCodeLookup);
 
   // 8. Soumission du formulaire
   const form = g('signup-form');

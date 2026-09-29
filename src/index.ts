@@ -24,6 +24,7 @@ import { onRequestGet as getHelloAssoStatus } from "./routes/api/public/payment/
 import { onRequestPost as postHelloAssoNotification } from "./routes/api/public/payment/helloasso/notification.js";
 import { onRequestPost as postHelloAssoResume } from "./routes/api/public/payment/helloasso/resume.js";
 import { onRequestGet as getTarifs } from "./routes/api/public/tarifs";
+import { onRequestGet as getCommune } from "./routes/api/public/commune.js";
 import { handleCleanupCron } from "./routes/cron/cleanup-abandoned.js";
 
 type RouteContext = { request: Request; env: Env };
@@ -176,6 +177,10 @@ async function routeApi(request: Request, env: Env, pathname: string): Promise<R
 
   if (pathname === "/api/public/tarifs" && request.method === "GET") {
     return getTarifs(context as any);
+  }
+
+  if (pathname === "/api/public/commune" && request.method === "GET") {
+    return getCommune(context);
   }
 
   return notFound();

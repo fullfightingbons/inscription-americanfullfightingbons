@@ -242,11 +242,11 @@
             <div class="form-grid two">
               <label class="field field-full">
                 <span>Adresse</span>
-                <input id="address1" autocomplete="street-address" required>
+                <input id="address1" autocomplete="address-line1" required>
               </label>
               <label class="field field-full">
-                <span>Complément d'adresse</span>
-                <input id="address2" autocomplete="address-line2" required placeholder="Si aucun, indiquez Néant">
+                <span>Complément d'adresse (facultatif)</span>
+                <input id="address2" autocomplete="address-line2" placeholder="Appartement, bâtiment, étage…">
               </label>
               <label class="field">
                 <span>Code postal</span>
@@ -255,7 +255,8 @@
               </label>
               <label class="field">
                 <span>Ville</span>
-                <input id="city" autocomplete="address-level2" required>
+                <input id="city" autocomplete="address-level2" list="city-suggestions" required>
+                <datalist id="city-suggestions"></datalist>
               </label>
               <label class="field">
                 <span>Téléphone principal</span>

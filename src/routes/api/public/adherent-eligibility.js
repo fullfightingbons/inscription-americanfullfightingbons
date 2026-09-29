@@ -1,50 +1,12 @@
 import { badRequest, json } from "../../_lib/data.js";
+import { normalizeNameForComparison, normalizeDateForComparison, normalizeEmail } from "../../_lib/helpers.js";
 
 function normalizePersonName(value) {
   return String(value || "").trim();
 }
 
-function normalizeEmail(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
 function hasBureauDiscipline(discipline) {
   return String(discipline || "").toLowerCase().includes("membre du bureau");
-}
-
-// Voir le commentaire identique dans inscription.js : le nom/prénom stocké
-// peut contenir des accents (Héloïse, Danaï...). SQLite ne fournit pas
-// d'ICU par défaut : UPPER() ne normalise QUE les lettres ASCII et laisse
-// les caractères accentués tels quels. Comparer `UPPER(TRIM(nom)) = ?` en
-// SQL faisait donc échouer silencieusement la vérification pour toute
-// personne dont le nom contient un accent, dès que celui-ci est retapé
-// légèrement différemment (oublié, ou encodé dans une autre forme Unicode
-// de composition). On normalise donc en supprimant les diacritiques avant
-// de comparer.
-function normalizeNameForComparison(value) {
-  return String(value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .toUpperCase();
-}
-
-// Voir le commentaire identique dans inscription.js : cette même fonction
-// existait en double ici, avec le même bug de comparaison stricte de
-// chaînes qui faisait échouer la vérification pour des dates pourtant
-// identiques mais stockées dans un format légèrement différent (import CSV
-// historique, saisie ancienne...).
-function normalizeDateForComparison(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (iso) return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
-  const fr = raw.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
-  if (fr) {
-    const year = fr[3].length === 2 ? `20${fr[3]}` : fr[3];
-    return `${year}-${fr[2].padStart(2, "0")}-${fr[1].padStart(2, "0")}`;
-  }
-  return raw;
 }
 
 export async function onRequestGet(context) {
