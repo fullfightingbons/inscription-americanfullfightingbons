@@ -589,11 +589,16 @@ async function insertVenteTenueJournal(db, factureId, nom, prenom, totals, exerc
   return piece;
 }
 
-async function insertPassRegionJournal(db, adherentId, nom, prenom, totals, exercise, paidAt) {
+export async function insertPassRegionJournal(db, adherentId, nom, prenom, totals, exercise, paidAt) {
   const amount = Number(totals.passRegionAmount || 0);
   if (!amount) return null;
   const now = new Date().toISOString();
   const dateOp = String(paidAt || now).slice(0, 10);
+  // Même correctif que insertCotisationJournal ci-dessus, même contrat avec
+  // gestion (piece SANS segment d'exercice, scoping fait via exercice_id
+  // dans replaceJournalEntryGroup) : cette ligne avait été oubliée lors du
+  // correctif du 27/09/2026, le Pass Région restait donc vulnérable au même
+  // effacement inter-saisons que la cotisation.
   const piece = `SUB-${String(adherentId).slice(0, 8)}`;
   const labelName = `${nom} ${prenom}`.trim();
   const common = {
@@ -625,7 +630,7 @@ async function insertPassRegionJournal(db, adherentId, nom, prenom, totals, exer
                                debit: 0,
                                credit: amount,
     },
-  ]);
+  ], { exerciceId: exercise?.id || null });
 
   return piece;
 }

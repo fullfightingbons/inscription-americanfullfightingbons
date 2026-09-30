@@ -1,0 +1,57 @@
+<svg viewBox="0 0 560 380" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="Illustration schématique d'une carte Pass'Région, montrant où se trouvent le code à 4 chiffres et le numéro de dossier">
+  <defs>
+    <clipPath id="cardClip">
+      <rect x="130" y="70" width="300" height="190" rx="18"/>
+    </clipPath>
+    <linearGradient id="stripeGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#d6ac54"/>
+      <stop offset="1" stop-color="#f1e4c6"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="560" height="380" fill="#fffdf9"/>
+
+  <!-- Carte -->
+  <g clip-path="url(#cardClip)">
+    <rect x="130" y="70" width="300" height="190" fill="#07111d"/>
+    <rect x="130" y="70" width="300" height="36" fill="url(#stripeGrad)"/>
+  </g>
+  <rect x="130" y="70" width="300" height="190" rx="18" fill="none" stroke="rgba(15,23,32,.25)" stroke-width="1.5"/>
+
+  <text x="148" y="94" font-family="Georgia, 'Times New Roman', serif" font-size="16" font-weight="700"
+        fill="#07111d" letter-spacing="1">PASS'RÉGION</text>
+
+  <!-- Silhouette photo -->
+  <rect x="148" y="124" width="60" height="76" rx="8" fill="#f1e4c6"/>
+  <circle cx="178" cy="150" r="13" fill="#607080"/>
+  <path d="M160 194 a18 18 0 0 1 36 0 z" fill="#607080"/>
+
+  <!-- Lignes nom / prénom -->
+  <rect x="222" y="132" width="150" height="9" rx="4" fill="rgba(255,253,249,.55)"/>
+  <rect x="222" y="150" width="110" height="9" rx="4" fill="rgba(255,253,249,.32)"/>
+
+  <!-- Zone code -->
+  <rect x="148" y="206" width="118" height="38" rx="8" fill="none" stroke="#d84a2f" stroke-width="2" stroke-dasharray="4 3"/>
+  <text x="156" y="231" font-family="'Courier New', monospace" font-size="18" font-weight="700"
+        fill="#fffdf9" letter-spacing="6">••••</text>
+
+  <!-- Zone numéro de dossier -->
+  <rect x="276" y="206" width="134" height="38" rx="8" fill="none" stroke="#1f6b47" stroke-width="2" stroke-dasharray="4 3"/>
+  <text x="284" y="231" font-family="'Courier New', monospace" font-size="12.5" font-weight="700"
+        fill="#fffdf9">PR-XXXX-XXXXX</text>
+
+  <!-- Callout code (vers le haut-gauche) -->
+  <line x1="148" y1="225" x2="55" y2="152" stroke="#d84a2f" stroke-width="1.5" stroke-dasharray="3 3"/>
+  <circle cx="148" cy="225" r="3" fill="#d84a2f"/>
+  <text x="20" y="132" font-family="Georgia, serif" font-size="19" font-weight="700" fill="#9f2413">Code</text>
+  <text x="20" y="152" font-family="Georgia, serif" font-size="12.5" fill="#607080">(4 chiffres)</text>
+
+  <!-- Callout dossier (vers le bas-droite) -->
+  <line x1="410" y1="225" x2="500" y2="295" stroke="#1f6b47" stroke-width="1.5" stroke-dasharray="3 3"/>
+  <circle cx="410" cy="225" r="3" fill="#1f6b47"/>
+  <text x="540" y="308" font-family="Georgia, serif" font-size="17" font-weight="700" fill="#1f6b47" text-anchor="end">N° dossier</text>
+
+  <!-- Légende -->
+  <text x="20" y="358" font-family="Georgia, serif" font-size="12" font-style="italic" fill="#607080">Illustration schématique — la carte réelle peut différer.</text>
+</svg>

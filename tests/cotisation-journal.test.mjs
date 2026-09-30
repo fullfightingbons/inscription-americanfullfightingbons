@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { insertCotisationJournal } from "../src/routes/api/public/payment/helloasso/status.js";
+import { insertCotisationJournal, insertPassRegionJournal } from "../src/routes/api/public/payment/helloasso/status.js";
 
 // Faux D1 modélisant journal_comptable en mémoire, juste assez fidèlement
 // pour exécuter les deux requêtes que fait insertCotisationJournal :
@@ -167,4 +167,56 @@ test("les deux lignes restent équilibrées (débit 411 = crédit 7561) pour cha
     assert.equal(debit, credit);
     assert.equal(debit, 250);
   }
+});
+
+// ─── insertPassRegionJournal ───────────────────────────────────────────────
+// Même bug, même correctif que insertCotisationJournal ci-dessus : le Pass
+// Région avait été oublié lors du correctif du 27/09/2026 (replaceJournalEntryGroup
+// était toujours appelée sans { exerciceId }, donc sans le scoping SQL).
+
+const TOTALS_PASS_REGION = { passRegionAmount: 30 };
+
+test("Pass Région : un renouvellement en saison N+1 conserve la subvention de la saison N", async () => {
+  const db = fakeJournalDb();
+
+  await insertPassRegionJournal(db, ADHERENT_ID, "GRALLIEN", "Laurent", TOTALS_PASS_REGION, EXERCICE_2025, "2025-09-01T10:00:00Z");
+  assert.equal(db.rows.length, 2, "2 lignes (471 + 7410) attendues après la 1re saison");
+
+  await insertPassRegionJournal(db, ADHERENT_ID, "GRALLIEN", "Laurent", TOTALS_PASS_REGION, EXERCICE_2026, "2026-09-07T10:00:00Z");
+
+  assert.equal(db.rows.length, 4, "les 2 lignes de 2025 doivent survivre, 2 nouvelles s'ajoutent pour 2026");
+  const parExercice = (id) => db.rows.filter((r) => r.exercice_id === id);
+  assert.equal(parExercice(EXERCICE_2025.id).length, 2);
+  assert.equal(parExercice(EXERCICE_2026.id).length, 2);
+});
+
+test("Pass Région : revérifier le paiement de la MÊME inscription reste idempotent", async () => {
+  const db = fakeJournalDb();
+
+  await insertPassRegionJournal(db, ADHERENT_ID, "GRALLIEN", "Laurent", TOTALS_PASS_REGION, EXERCICE_2026, "2026-09-07T10:00:00Z");
+  await insertPassRegionJournal(db, ADHERENT_ID, "GRALLIEN", "Laurent", TOTALS_PASS_REGION, EXERCICE_2026, "2026-09-07T10:00:00Z");
+
+  assert.equal(db.rows.length, 2, "la même saison doit être remplacée, pas dupliquée");
+});
+
+test("Pass Région : contrat avec gestion : format de pièce SUB-<8 hex>-(ATT|SUB), sans segment d'exercice", async () => {
+  const db = fakeJournalDb();
+
+  const piece = await insertPassRegionJournal(db, ADHERENT_ID, "GRALLIEN", "Laurent", TOTALS_PASS_REGION, EXERCICE_2026, "2026-09-07T10:00:00Z");
+
+  assert.match(piece, /^SUB-[0-9a-f]{8}$/);
+  assert.deepEqual(
+    db.rows.map((r) => r.piece).sort(),
+    [`${piece}-ATT`, `${piece}-SUB`],
+  );
+  for (const r of db.rows) assert.match(r.piece, /^SUB-[0-9a-f]{8}-(ATT|SUB)$/);
+});
+
+test("Pass Région : montant à 0 € : aucune écriture (comportement inchangé)", async () => {
+  const db = fakeJournalDb();
+
+  const piece = await insertPassRegionJournal(db, ADHERENT_ID, "GRALLIEN", "Laurent", { passRegionAmount: 0 }, EXERCICE_2026, "2026-09-07T10:00:00Z");
+
+  assert.equal(piece, null);
+  assert.equal(db.rows.length, 0);
 });
