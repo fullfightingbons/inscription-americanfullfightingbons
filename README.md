@@ -15,6 +15,7 @@ Application publique d'inscription pour `inscription.americanfullfightingbons.fr
 - `src/index.ts` : routage du worker
 - `src/routes/api/public/inscription-config.js` : configuration publique du formulaire
 - `src/routes/api/public/inscription.js` : création du dossier + session HelloAsso
+- `src/routes/api/public/cse-access.js` + `src/routes/_lib/cse-access.js` : accès « CSE Thalès » hors période d'ouverture (voir plus bas)
 - `src/routes/api/public/payment/helloasso/status.js` : validation du paiement et finalisation métier
 - `src/routes/api/public/payment/helloasso/resume.js` : reprise du paiement d'un dossier déjà enregistré (nouveau checkout)
 - `migrations/` : schéma D1
@@ -130,12 +131,25 @@ Le lien de paiement HelloAsso n'est valable que **15 minutes**. Un adhérent peu
 - Côté serveur, `resume.js` : (1) refuse un dossier expiré (`abandonnee`) ; (2) **vérifie d'abord qu'aucune tentative précédente n'a été payée** (via `status.js`, qui finalise alors le dossier) et refuse d'ouvrir un second paiement si HelloAsso est injoignable ; (3) crée un nouveau checkout à partir du dossier stocké (l'adhérent peut changer le nombre d'échéances) ; (4) garde l'ancien identifiant dans `dossier_json.payment.previousCheckoutIntentIds`, que `status.js` relit pour retrouver un paiement fait sur un ancien lien. Plafond : 8 reprises par dossier.
 - Ce traitement passe **avant** l'état « inscriptions fermées » : quelqu'un qui a déjà envoyé son dossier peut toujours terminer son paiement.
 
+## Accès CSE Thalès hors période d'ouverture
+
+Quand les inscriptions sont fermées (`club_info.public_inscription_enabled` = `0`), les membres du CSE Thalès peuvent tout de même s'inscrire toute l'année :
+
+- La page « Inscriptions fermées » affiche un bouton **« Je suis membre du CSE Thalès »**, uniquement si un code est configuré. Le membre saisit le code que le CSE lui a communiqué.
+- Le code est défini dans `gestion` (**Tarifs en ligne → Accès CSE Thalès**, bouton « Générer » possible) et stocké dans `club_info.public_inscription_cse_code`. **Pas de code enregistré (ou moins de 8 caractères hors tirets) = accès totalement fermé**, le bouton n'apparaît pas. Changer le code invalide l'ancien immédiatement.
+- Le code n'est jamais renvoyé au navigateur : `/inscription-config` n'expose qu'un booléen `cseAccessEnabled`. Il est comparé par empreintes SHA-256, sans tenir compte de la casse, des espaces ni des tirets.
+- Le navigateur garde le code validé en `sessionStorage` (effacé à la fermeture de l'onglet) et le renvoie à chaque soumission dans l'en-tête `X-CSE-Access-Code`. `POST /api/public/inscription` le revérifie et **n'accepte alors que la formule `cse_thales`** (403 sinon) : la restriction est imposée côté serveur, pas seulement dans l'interface. Le justificatif (attestation employeur) reste obligatoire comme d'habitude.
+- Quand les inscriptions sont ouvertes, le code ne sert à rien : tout le monde s'inscrit normalement.
+- Pas de migration : le code est une simple ligne de `club_info`.
+- Recommandation : ajouter une règle de limitation de débit Cloudflare (WAF → Rate limiting rules) sur `/api/public/cse-access`. Côté Worker, chaque refus est ralenti (~0,8 s) et journalisé (`console.warn`), mais rien n'est écrit en base.
+
 ## URLs publiques
 
 - `/` : formulaire d'inscription
 - `/inscription`, `/inscription/` : redirections de compatibilité vers `/`
 - `/inscription-config` : configuration publique du formulaire
 - `/api/public/inscription` : soumission du dossier
+- `/api/public/cse-access` : vérification du code d'accès CSE Thalès (`POST`, JSON `{ code }`)
 - `/api/public/payment/helloasso/status` : vérification du paiement HelloAsso
 - `/api/public/payment/helloasso/notification` : webhook HelloAsso `Order` / `Payment`
 - `/api/public/payment/helloasso/resume` : reprise du paiement d'un dossier en attente (`POST`, JSON `{ registrationId, installmentCount? }`)

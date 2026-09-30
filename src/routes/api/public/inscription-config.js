@@ -1,5 +1,6 @@
 import { badRequest, json } from "../../_lib/data.js";
 import { clothingStockResponse, fetchBoutiqueClothingStock, fetchBoutiqueProducts } from "../../_lib/boutique-stock.js";
+import { CSE_ACCESS_CODE_KEY, isUsableCseCode } from "../../_lib/cse-access.js";
 
 /**
  * Valeurs par défaut de l'interface publique.
@@ -46,6 +47,9 @@ const DEFAULT_CONFIG = {
   orderProducts: [],
   isOpen: true,
   closedMessage: "Les inscriptions sont actuellement fermées. Revenez bientôt !",
+  // Vrai si un code d'accès CSE Thalès est configuré (le code lui-même n'est
+  // JAMAIS exposé ici — voir _lib/cse-access.js).
+  cseAccessEnabled: false,
 };
 
 function buildBank(clubInfo = {}, env = {}) {
@@ -98,6 +102,7 @@ function buildConfig(clubInfo = {}, env = {}) {
       ? DEFAULT_CONFIG.isOpen
       : !["0", "false", "non", "off"].includes(String(clubInfo.public_inscription_enabled).trim().toLowerCase()),
     closedMessage: clubInfo.public_inscription_closed_message || DEFAULT_CONFIG.closedMessage,
+    cseAccessEnabled: isUsableCseCode(clubInfo[CSE_ACCESS_CODE_KEY]),
     paymentProviders: {
       currency:         env.PAYMENT_CURRENCY || DEFAULT_CONFIG.paymentProviders.currency,
       stripeEnabled:    Boolean(env.STRIPE_SECRET_KEY),

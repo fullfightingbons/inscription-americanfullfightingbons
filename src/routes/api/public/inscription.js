@@ -23,6 +23,7 @@ import {
   fetchBoutiqueProducts,
 } from "../../_lib/boutique-stock.js";
 import { finalizeFreeRegistration } from "../../_lib/free-registration.js";
+import { CSE_ACCESS_FORMULA, readCseAccessHeader, verifyCseAccessCode } from "../../_lib/cse-access.js";
 
 const MAX_FILE_SIZE = 8 * 1024 * 1024; // 8 Mo
 const FETCH_TIMEOUT_MS = 12_000; // 12 s pour les appels externes
@@ -780,9 +781,18 @@ export async function onRequestPost(context) {
   // Vérifié en tout premier, avant même de parser le formulaire : un visiteur
   // ne doit jamais pouvoir soumettre une inscription tant que c'est fermé,
   // même en rejouant une requête ou en contournant le frontend.
+  //
+  // Dérogation « CSE Thalès » : quand c'est fermé, une requête portant un code
+  // d'accès CSE valide (en-tête X-CSE-Access-Code) est tolérée, mais
+  // UNIQUEMENT pour la formule « cse_thales » (contrôlée plus bas, une fois le
+  // payload lu). Sans code valide, le verrou reste total.
   const inscriptionStatus = await loadInscriptionStatus(context.env.DB);
+  let cseAccessGranted = false;
   if (!inscriptionStatus.isOpen) {
-    return json({ error: inscriptionStatus.closedMessage, closed: true }, { status: 423 });
+    cseAccessGranted = await verifyCseAccessCode(context.env.DB, readCseAccessHeader(context.request));
+    if (!cseAccessGranted) {
+      return json({ error: inscriptionStatus.closedMessage, closed: true }, { status: 423 });
+    }
   }
 
   // Suivi pour nettoyage en cas d'échec après le point de non-retour (voir catch
@@ -803,6 +813,16 @@ export async function onRequestPost(context) {
     }
 
     const payload    = parseJsonField(formData, "payload");
+
+    // Hors période d'ouverture, le code CSE n'autorise que le tarif CSE Thalès.
+    // Contrôlé dès la lecture du payload, avant toute validation métier.
+    if (cseAccessGranted && payload?.practice?.formulaCode !== CSE_ACCESS_FORMULA) {
+      return badRequest(
+        "Les inscriptions sont fermées : seule l'inscription au tarif CSE Thalès est possible avec ce code d'accès.",
+        403,
+      );
+    }
+
     const validation = validatePayload(payload);
 
     // ── Blocage blacklist (radiation prononcée par le bureau) ────────────────

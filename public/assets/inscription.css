@@ -426,6 +426,60 @@ a{color:inherit}
   font-size:13px !important;
 }
 
+/* Accès CSE Thalès (inscriptions fermées au public) */
+.cse-access{
+  margin-top:22px;
+  padding-top:20px;
+  border-top:1px solid var(--line);
+}
+.cse-access-form{
+  margin:16px auto 0;
+  max-width:420px;
+  text-align:left;
+}
+.cse-access-form label{
+  display:block;
+  margin-bottom:8px;
+  color:var(--ink);
+  font-size:14px;
+  font-weight:600;
+}
+.cse-access-row{
+  display:flex;
+  gap:10px;
+  align-items:stretch;
+}
+.cse-access-row input{
+  flex:1;
+  min-width:0;
+  border-radius:16px;
+  border:1px solid var(--line);
+  background:#fff;
+  padding:13px 14px;
+  font:inherit;
+  color:var(--ink);
+  letter-spacing:.06em;
+}
+.cse-access-row input:focus{
+  outline:none;
+  border-color:rgba(216,74,47,.45);
+  box-shadow:0 0 0 4px rgba(216,74,47,.08);
+}
+.cse-access-row .btn{white-space:nowrap}
+.cse-access-error{
+  margin:10px 0 0 !important;
+  color:var(--red-dark) !important;
+  font-size:13px !important;
+}
+.cse-access-hint{
+  margin:10px 0 0 !important;
+  font-size:12px !important;
+}
+@media (max-width:560px){
+  .cse-access-row{flex-direction:column}
+  .cse-access-row input{font-size:16px}
+}
+
 .step-heading{
   display:flex;
   gap:16px;

@@ -63,6 +63,18 @@
         <h2>Inscriptions fermées</h2>
         <p id="inscription-closed-message">Les inscriptions sont actuellement fermées. Revenez bientôt !</p>
         <p class="closed-banner-contact">Pour toute question, contactez-nous : <span id="closed-club-contact"></span></p>
+        <div id="cse-access" class="cse-access" hidden>
+          <button type="button" class="btn" id="cse-access-toggle" aria-expanded="false" aria-controls="cse-access-form">Je suis membre du CSE Thalès</button>
+          <form id="cse-access-form" class="cse-access-form" hidden novalidate>
+            <label for="cse-access-code">Code d'accès CSE Thalès</label>
+            <div class="cse-access-row">
+              <input id="cse-access-code" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="64" placeholder="XXXX-XXXX-XXXX">
+              <button type="submit" class="btn primary" id="cse-access-submit">Accéder</button>
+            </div>
+            <p id="cse-access-error" class="cse-access-error" role="alert" hidden></p>
+            <p class="cse-access-hint">Ce code vous a été communiqué par le CSE Thalès. Il donne accès à l'inscription au tarif CSE Thalès, toute l'année.</p>
+          </form>
+        </div>
       </div>
     </div>
 
@@ -110,6 +122,7 @@
           <button type="button" class="btn btn-small" id="clear-draft-button">Effacer le brouillon</button>
         </div>
 
+        <div id="cse-access-banner" class="alert alert-info" hidden>Les inscriptions sont fermées au public. Cet accès est réservé aux membres du CSE Thalès : le tarif CSE Thalès s'applique et l'attestation employeur sera demandée.</div>
         <div id="draft-alert" class="alert alert-info" hidden aria-live="polite"></div>
         <div id="signup-alert" class="alert" hidden role="alert"></div>
 

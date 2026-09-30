@@ -24,6 +24,11 @@ const STATUS_URL = '/api/public/payment/helloasso/status'; // GET — backend st
 const TARIFS_URL = '/api/public/tarifs';
 const COMMUNE_URL = '/api/public/commune'; // GET ?cp=XXXXX — backend commune.js
 const RESUME_URL = '/api/public/payment/helloasso/resume'; // POST — backend resume.js
+const CSE_ACCESS_URL = '/api/public/cse-access'; // POST — backend cse-access.js
+const CSE_ACCESS_HEADER = 'X-CSE-Access-Code';
+// Code CSE Thalès validé dans cet onglet (sessionStorage : effacé à la fermeture de l'onglet).
+const CSE_ACCESS_STORAGE_KEY = 'affbc_cse_access_code';
+const CSE_ACCESS_FORMULA = 'cse_thales';
 // Dossier envoyé mais dont le paiement n'est pas confirmé : mémorisé dans ce
 // navigateur pour proposer de reprendre le paiement (les dossiers non payés
 // sont conservés 48 h côté serveur, puis purgés par le cron).
@@ -53,6 +58,8 @@ let currentStep = 0;
 const TOTAL_STEPS = 8;
 let bureauEligibility = { checked: false, renewalVerified: false, eligibleForBureauRate: false, reason: 'missing_fields' };
 let bureauEligibilityTimer = null;
+// Non vide = inscriptions fermées au public, mais accès CSE Thalès validé (formule verrouillée sur cse_thales).
+let cseAccessCode = '';
 
 // ─── Utilitaires DOM ──────────────────────────────────────────────────────────
 
@@ -550,6 +557,8 @@ function syncBureauFormulaOption() {
   const formulaSelect = g('formulaCode');
   const note = g('bureau-member-note');
   if (!formulaSelect) return;
+  // Accès CSE Thalès hors période d'ouverture : une seule formule possible.
+  if (cseAccessCode) { enforceCseFormula(); return; }
 
   let bureauOption = formulaSelect.querySelector('option[value="bureau"]');
   if (bureauEligibility.eligibleForBureauRate) {
@@ -697,6 +706,7 @@ function updateConditionals() {
   document.querySelectorAll('[data-show-when="passRegion"]').forEach(el => el.hidden = !passRegion);
   document.querySelectorAll('[data-show-when="noPassRegion"]').forEach(el => el.hidden = passRegion);
 
+  enforceCseFormula();
   const formula = val('formulaCode');
   const needProof = formula === 'pro' || formula === 'cse_thales';
   document.querySelectorAll('[data-show-when="proofNeeded"]').forEach(el => el.hidden = !needProof);
@@ -1284,6 +1294,103 @@ function applyClosedState() {
       contactEl.textContent = [CONFIG?.clubPhone, CONFIG?.clubEmail].filter(Boolean).join(' · ');
     }
   }
+  initCseAccessPrompt();
+}
+
+// ─── Accès CSE Thalès hors période d'ouverture ───────────────────────────────
+// Quand les inscriptions sont fermées, les membres du CSE Thalès peuvent saisir
+// un code (défini dans le logiciel de gestion) pour débloquer le formulaire,
+// limité au tarif « CSE Thalès ». Le code est vérifié côté serveur, à la saisie
+// puis à chaque soumission du dossier (en-tête X-CSE-Access-Code).
+
+async function checkCseAccessCode(code) {
+  try {
+    const res = await fetch(CSE_ACCESS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    if (res.ok) return { ok: true, message: '' };
+    const data = await res.json().catch(() => null);
+    return {
+      ok: false,
+      message: res.status === 403
+        ? 'Code invalide. Vérifiez le code communiqué par le CSE Thalès.'
+        : (data?.error || 'Vérification impossible pour le moment. Réessayez dans un instant.'),
+    };
+  } catch (e) {
+    return { ok: false, message: 'Erreur de connexion. Réessayez dans un instant.' };
+  }
+}
+
+// Reprend un accès CSE déjà validé dans cet onglet (rechargement de page,
+// retour de HelloAsso…) — revérifié auprès du serveur à chaque fois.
+async function restoreCseAccess() {
+  if (!CONFIG?.cseAccessEnabled) return false;
+  let stored = '';
+  try { stored = sessionStorage.getItem(CSE_ACCESS_STORAGE_KEY) || ''; } catch (e) { /* ignore */ }
+  if (!stored) return false;
+  const check = await checkCseAccessCode(stored);
+  if (check.ok) { cseAccessCode = stored; return true; }
+  try { sessionStorage.removeItem(CSE_ACCESS_STORAGE_KEY); } catch (e) { /* ignore */ }
+  return false;
+}
+
+function initCseAccessPrompt() {
+  const wrapper = g('cse-access');
+  if (!wrapper || !CONFIG?.cseAccessEnabled) return; // fonctionnalité désactivée : aucun bouton
+  wrapper.hidden = false;
+
+  const toggle = g('cse-access-toggle');
+  const form = g('cse-access-form');
+  const input = g('cse-access-code');
+  const submit = g('cse-access-submit');
+  const errorEl = g('cse-access-error');
+  if (!toggle || !form || !input || !submit) return;
+
+  const showError = (msg) => { if (errorEl) { errorEl.textContent = msg; errorEl.hidden = !msg; } };
+
+  toggle.addEventListener('click', () => {
+    form.hidden = !form.hidden;
+    toggle.setAttribute('aria-expanded', String(!form.hidden));
+    if (!form.hidden) input.focus();
+  });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const code = input.value.trim();
+    if (!code) { showError('Saisissez votre code d\'accès.'); return; }
+    submit.disabled = true;
+    submit.textContent = 'Vérification…';
+    showError('');
+    const check = await checkCseAccessCode(code);
+    if (check.ok) {
+      try { sessionStorage.setItem(CSE_ACCESS_STORAGE_KEY, code); } catch (e) { /* ignore */ }
+      // Recharge : init() reprend le code validé et affiche le formulaire.
+      window.location.reload();
+      return;
+    }
+    showError(check.message);
+    submit.disabled = false;
+    submit.textContent = 'Accéder';
+    input.select();
+  });
+}
+
+// Verrouille la formule tarifaire sur « CSE Thalès » (mode accès CSE uniquement).
+// Le serveur impose la même règle : ceci n'est que le reflet dans l'interface.
+function enforceCseFormula() {
+  if (!cseAccessCode) return;
+  const select = g('formulaCode');
+  if (!select) return;
+  Array.from(select.options).forEach((option) => {
+    if (option.value !== CSE_ACCESS_FORMULA) option.remove();
+  });
+  if (select.value !== CSE_ACCESS_FORMULA) select.value = CSE_ACCESS_FORMULA;
+  const note = g('bureau-member-note');
+  if (note) note.textContent = 'Inscription réservée aux membres du CSE Thalès : le tarif CSE Thalès est appliqué.';
+  const familyNote = g('family-rate-note');
+  if (familyNote) familyNote.hidden = true;
 }
 
 // ─── Construction du payload JSON final ──────────────────────────────────────
@@ -1453,7 +1560,9 @@ async function submitForm(event) {
     formData.append('website', '');
 
     if (btn) btn.textContent = 'Envoi en cours…';
-    const res = await fetch(SUBMIT_URL, { method: 'POST', body: formData });
+    const submitOptions = { method: 'POST', body: formData };
+    if (cseAccessCode) submitOptions.headers = { [CSE_ACCESS_HEADER]: encodeURIComponent(cseAccessCode) };
+    const res = await fetch(SUBMIT_URL, submitOptions);
     const data = await res.json().catch(() => null);
 
     if (!res.ok || data?.error) {
@@ -1944,9 +2053,17 @@ async function init() {
   // n'initialise rien d'autre (pas de formulaire, pas de handlers de
   // soumission) : c'est une mesure d'UX, la vraie protection est côté
   // serveur dans /api/public/inscription (POST).
+  //
+  // Exception : un membre du CSE Thalès qui a saisi un code valide dans cet
+  // onglet garde accès au formulaire (formule verrouillée sur « CSE Thalès »).
   if (CONFIG && CONFIG.isOpen === false) {
-    applyClosedState();
-    return;
+    if (await restoreCseAccess()) {
+      const cseBanner = g('cse-access-banner');
+      if (cseBanner) cseBanner.hidden = false;
+    } else {
+      applyClosedState();
+      return;
+    }
   }
 
   // 3. Rendre le QS et les commandes
@@ -1979,6 +2096,9 @@ async function init() {
       }
     }
   }
+
+  // Accès CSE : un brouillon ou un préremplissage ne doit pas réintroduire une autre formule.
+  enforceCseFormula();
 
   // 5. Afficher l'étape initiale
   showStep(draft?.step || 0);

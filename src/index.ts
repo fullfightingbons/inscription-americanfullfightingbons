@@ -20,6 +20,7 @@
 import { onRequestGet as getInscriptionConfig } from "./routes/api/public/inscription-config.js";
 import { onRequestGet as getAdherentEligibility } from "./routes/api/public/adherent-eligibility.js";
 import { onRequestPost as postInscription } from "./routes/api/public/inscription.js";
+import { onRequestPost as postCseAccess } from "./routes/api/public/cse-access.js";
 import { onRequestGet as getHelloAssoStatus } from "./routes/api/public/payment/helloasso/status.js";
 import { onRequestPost as postHelloAssoNotification } from "./routes/api/public/payment/helloasso/notification.js";
 import { onRequestPost as postHelloAssoResume } from "./routes/api/public/payment/helloasso/resume.js";
@@ -161,6 +162,10 @@ async function routeApi(request: Request, env: Env, pathname: string): Promise<R
   if ((pathname === "/api/public/inscription" || pathname === "/api/public/inscription/") &&
       request.method === "POST") {
     return postInscription(context);
+  }
+
+  if (pathname === "/api/public/cse-access" && request.method === "POST") {
+    return postCseAccess(context);
   }
 
   if (pathname === "/api/public/payment/helloasso/status" && request.method === "GET") {
