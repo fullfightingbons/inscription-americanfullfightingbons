@@ -270,14 +270,14 @@ export function buildInscriptionSaleLines(totals) {
       pu: Number(totals.passport || 0),
     });
   }
-  if (totals.tshirtQty > 0) {
+  if (totals.tshirtQty > 0 && Number(totals.pricingTshirt ?? 0) > 0) {
     lignes.push({
       desc: "Vente t-shirt club AFFBC",
       qte: totals.tshirtQty,
       pu: totals.pricingTshirt,
     });
   }
-  if (totals.pantalonQty > 0) {
+  if (totals.pantalonQty > 0 && Number(totals.pricingPantalon ?? 0) > 0) {
     lignes.push({
       desc: "Vente pantalon club AFFBC",
       qte: totals.pantalonQty,
@@ -682,8 +682,8 @@ function buildRegistrationPayload(registration, dossier, adherentId, exercise) {
       extraProductsTotal: Number(totals.extraProductsTotal || 0),
       passRegionAmount: Number(totals.passRegionAmount || 0),
       total:            Number(registration.montant_total || totals.total || 0),
-      pricingTshirt:    Number(totals.pricingTshirt   || 25),
-      pricingPantalon:  Number(totals.pricingPantalon || 15),
+      pricingTshirt:    Number(totals.pricingTshirt   ?? 25),
+      pricingPantalon:  Number(totals.pricingPantalon ?? 15),
       certificateRequired: Boolean(totals.certificateRequired),
       orderItems: Array.isArray(totals.orderItems) ? totals.orderItems : [],
     },
@@ -1158,8 +1158,8 @@ export async function onRequestGet(context) {
       Number(totals.passport || 0) > 0 ||
       Number(totals.newMemberKit || 0) > 0 ||
       Number(totals.extraProductsTotal || 0) > 0 ||
-      (totals.tshirtQty > 0) ||
-      (totals.pantalonQty > 0);
+      (totals.tshirtQty > 0 && Number(totals.pricingTshirt ?? 0) > 0) ||
+      (totals.pantalonQty > 0 && Number(totals.pricingPantalon ?? 0) > 0);
     if (hasSales) {
       const contact = dossier.contact || {};
       const adresse = [contact.address1, contact.address2, contact.postalCode, contact.city]

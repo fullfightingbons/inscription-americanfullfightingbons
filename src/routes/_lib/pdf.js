@@ -574,8 +574,8 @@ export async function generateAdherentPdf(registration, photo = null, env = null
 
   const tshirtQty    = Number(co.tshirtQty    || 0);
   const pantalonQty  = Number(co.pantalonQty  || 0);
-  const priceTshirt  = Number(totals.pricingTshirt   || 25);
-  const pricePantalon= Number(totals.pricingPantalon || 15);
+  const priceTshirt  = Number(totals.pricingTshirt   ?? 25);
+  const pricePantalon= Number(totals.pricingPantalon ?? 15);
 
   const tenueRows = [
     ['T-shirt club AFFBC',  `${priceTshirt} EUR`,  displaySize(co.tshirtSize),   tshirtQty,   `${(tshirtQty   * priceTshirt  ).toFixed(2)} EUR`],

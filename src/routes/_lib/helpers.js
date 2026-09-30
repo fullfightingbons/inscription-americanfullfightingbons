@@ -196,9 +196,18 @@ export function calculateTotals(practice, pricing, clothing = {}, extraOrderItem
   // logiciel de gestion (club_info.inscription_pricing.newMemberKit) n'a
   // donc plus aucun effet — conservé en lecture pour compatibilité mais
   // toujours ignoré ici.
+  //
+  // Tenue offerte aux Membres du Bureau : la formule 'bureau' n'est acceptée
+  // par inscription.js qu'après vérification serveur (renouvellement reconnu
+  // + discipline "membre du bureau" sur la fiche adhérent) — on peut donc s'y
+  // fier ici. Les quantités restent celles commandées (l'adhérent reçoit bien
+  // ses vêtements : taille, stock boutique), seul le prix unitaire tombe à 0.
+  // ATTENTION : 0 est ici une valeur légitime — les appelants qui relisent
+  // pricingTshirt/pricingPantalon doivent utiliser `??` et non `|| 25`/`|| 15`.
+  const clothingFree    = formula === "bureau";
   const passport        = passportEnabled ? Number(pricing.passport || 25) : 0;
-  const pricingTshirt   = Number(pricing.tshirt   || 25);
-  const pricingPantalon = Number(pricing.pantalon || 15);
+  const pricingTshirt   = clothingFree ? 0 : Number(pricing.tshirt   || 25);
+  const pricingPantalon = clothingFree ? 0 : Number(pricing.pantalon || 15);
   const clothingTotal   = tshirtQty * pricingTshirt + pantalonQty * pricingPantalon;
   const requestedItems = Array.isArray(extraOrderItems) ? extraOrderItems : [];
   const catalog = Array.isArray(extraProductCatalog) ? extraProductCatalog : [];
@@ -244,6 +253,7 @@ export function calculateTotals(practice, pricing, clothing = {}, extraOrderItem
     // nouvel adhérent" ne sera plus générée) sans avoir à toucher chaque
     // appelant individuellement.
     clothingTotal,
+    clothingFree,
     extraProductsTotal,
     tshirtQty,
     pantalonQty,

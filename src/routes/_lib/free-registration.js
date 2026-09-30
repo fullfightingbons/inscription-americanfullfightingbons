@@ -192,8 +192,8 @@ async function insertFreeSalesIfAny(db, registrationId, adherentId, nom, prenom,
   const numero = await nextFactureNumero(db, exercise?.id);
   const lignes = [];
   if (Number(totals.newMemberKit || 0) > 0) lignes.push({ desc: "Vente kit nouvel adhérent", qte: 1, pu: Number(totals.newMemberKit || 0) });
-  if (totals.tshirtQty > 0) lignes.push({ desc: `Vente t-shirt club AFFBC (${clothingOrder?.tshirtSize || "-"})`, qte: totals.tshirtQty, pu: totals.pricingTshirt || 25 });
-  if (totals.pantalonQty > 0) lignes.push({ desc: `Vente pantalon club AFFBC (${clothingOrder?.pantalonSize || "-"})`, qte: totals.pantalonQty, pu: totals.pricingPantalon || 15 });
+  if (totals.tshirtQty > 0 && Number(totals.pricingTshirt ?? 25) > 0) lignes.push({ desc: `Vente t-shirt club AFFBC (${clothingOrder?.tshirtSize || "-"})`, qte: totals.tshirtQty, pu: totals.pricingTshirt ?? 25 });
+  if (totals.pantalonQty > 0 && Number(totals.pricingPantalon ?? 15) > 0) lignes.push({ desc: `Vente pantalon club AFFBC (${clothingOrder?.pantalonSize || "-"})`, qte: totals.pantalonQty, pu: totals.pricingPantalon ?? 15 });
   if (passportTotal > 0) lignes.push({ desc: "Vente passeport sportif", qte: 1, pu: passportTotal });
   for (const item of totals.orderItems || []) {
     if (Number(item.quantity || 0) > 0) lignes.push({ desc: `Vente ${item.name}`, qte: item.quantity, pu: item.unitPrice });
@@ -278,8 +278,8 @@ function buildRegistrationPdfPayload(registrationId, payload, totals, adherentId
       extraProductsTotal: Number(totals.extraProductsTotal || 0),
       passRegionAmount: Number(totals.passRegionAmount || 0),
       total: Number(totals.total || 0),
-      pricingTshirt: Number(totals.pricingTshirt || 25),
-      pricingPantalon: Number(totals.pricingPantalon || 15),
+      pricingTshirt: Number(totals.pricingTshirt ?? 25),
+      pricingPantalon: Number(totals.pricingPantalon ?? 15),
       certificateRequired: Boolean(totals.certificateRequired),
       orderItems: Array.isArray(totals.orderItems) ? totals.orderItems : [],
     },

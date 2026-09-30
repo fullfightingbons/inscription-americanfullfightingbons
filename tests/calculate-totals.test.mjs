@@ -88,3 +88,45 @@ test("calculateTotals throws on an unknown formulaCode", () => {
     /Formule tarifaire invalide/,
   );
 });
+
+// ── Tenue offerte aux Membres du Bureau ─────────────────────────────────────
+// La formule 'bureau' n'arrive jusqu'ici qu'après vérification serveur
+// (renouvellement reconnu + discipline "membre du bureau").
+
+test("calculateTotals : la tenue est offerte (0 €) avec la formule bureau, quantités conservées", () => {
+  const totals = calculateTotals(
+    { formulaCode: "bureau", typeInscription: "renouvellement" },
+    PRICING,
+    { tshirtQty: 1, pantalonQty: 2 },
+  );
+  assert.equal(totals.clothingFree, true);
+  assert.equal(totals.tshirtQty, 1);
+  assert.equal(totals.pantalonQty, 2);
+  assert.equal(totals.pricingTshirt, 0);
+  assert.equal(totals.pricingPantalon, 0);
+  assert.equal(totals.clothingTotal, 0);
+  assert.equal(totals.total, 0);
+});
+
+test("calculateTotals : bureau + passeport sportif → seul le passeport reste à payer", () => {
+  const totals = calculateTotals(
+    { formulaCode: "bureau", typeInscription: "renouvellement", passportEnabled: true },
+    PRICING,
+    { tshirtQty: 1, pantalonQty: 1 },
+  );
+  assert.equal(totals.clothingTotal, 0);
+  assert.equal(totals.total, 25);
+});
+
+test("calculateTotals : la tenue reste payante pour les autres formules", () => {
+  const totals = calculateTotals(
+    { formulaCode: "base", typeInscription: "renouvellement" },
+    PRICING,
+    { tshirtQty: 1, pantalonQty: 1 },
+  );
+  assert.equal(totals.clothingFree, false);
+  assert.equal(totals.pricingTshirt, 25);
+  assert.equal(totals.pricingPantalon, 15);
+  assert.equal(totals.clothingTotal, 40);
+  assert.equal(totals.total, 290);
+});

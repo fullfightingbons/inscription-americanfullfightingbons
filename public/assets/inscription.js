@@ -493,7 +493,14 @@ function calculateTotals() {
   const tshirtQty   = Math.max(0, clothing.tshirtQty);
   const pantalonQty = Math.max(0, clothing.pantalonQty);
   const passport = passportEnabled ? p.passport : 0;
-  const clothingTotal = tshirtQty * p.tshirt + pantalonQty * p.pantalon;
+  // Tenue offerte aux Membres du Bureau : l'option 'bureau' n'apparaît que si le
+  // renouvellement est reconnu avec la discipline "membre du bureau" (cf.
+  // refreshBureauEligibility) et le serveur revérifie de son côté — ce calcul
+  // n'est qu'un affichage, jamais une source de vérité.
+  const clothingFree = formula === 'bureau';
+  const unitTshirt   = clothingFree ? 0 : p.tshirt;
+  const unitPantalon = clothingFree ? 0 : p.pantalon;
+  const clothingTotal = tshirtQty * unitTshirt + pantalonQty * unitPantalon;
   const requestedItems = collectExtraOrderItems();
   const orderItems = getOrderProducts().map((product) => {
     const requested = requestedItems.find((item) => String(item.id) === String(product.id)) || {};
@@ -523,6 +530,9 @@ function calculateTotals() {
     passRegionAmount,
     passport,
     clothingTotal,
+    clothingFree,
+    unitTshirt,
+    unitPantalon,
     tshirtQty,
     pantalonQty,
     extraProductsTotal,
@@ -740,6 +750,7 @@ function updateSummary() {
       ${totals.passRegionAmount > 0 ? `<div class="summary-line"><strong>Remise Pass Région</strong><span>− ${totals.passRegionAmount.toFixed(2)} €</span></div>` : ''}
       ${totals.passport > 0 ? `<div class="summary-line"><strong>Passeport sportif</strong><span>${totals.passport.toFixed(2)} €</span></div>` : ''}
       ${totals.clothingTotal > 0 ? `<div class="summary-line"><strong>Tenue club</strong><span>${totals.clothingTotal.toFixed(2)} € · ${tshirtLabel} · ${pantalonLabel}</span></div>` : ''}
+      ${totals.clothingFree && (totals.tshirtQty > 0 || totals.pantalonQty > 0) ? `<div class="summary-line"><strong>Tenue club</strong><span>Offerte · ${tshirtLabel} · ${pantalonLabel}</span></div>` : ''}
       ${extraItemsSummary}
       <div class="summary-line"><strong>Total</strong><span style="font-size:18px;color:var(--red-dark)"><strong>${totals.total.toFixed(2)} €</strong></span></div>
       <div class="summary-line"><strong>Paiement</strong><span>${getInstallmentLabel()}</span></div>
@@ -753,6 +764,7 @@ function updateSummary() {
       ${totals.passRegionAmount > 0 ? `<div class="bank-line"><strong>Remise Pass Région</strong><code>− ${totals.passRegionAmount.toFixed(2)} €</code></div>` : ''}
       ${totals.passport > 0 ? `<div class="bank-line"><strong>Passeport sportif</strong><code>${totals.passport.toFixed(2)} €</code></div>` : ''}
       ${totals.clothingTotal > 0 ? `<div class="bank-line"><strong>Tenue club (${tshirtLabel} · ${pantalonLabel})</strong><code>${totals.clothingTotal.toFixed(2)} €</code></div>` : ''}
+      ${totals.clothingFree && (totals.tshirtQty > 0 || totals.pantalonQty > 0) ? `<div class="bank-line"><strong>Tenue club (${tshirtLabel} · ${pantalonLabel})</strong><code>Offerte</code></div>` : ''}
       ${extraItemsPayment}
       <div class="bank-line" style="border-color:rgba(162,53,33,.35)"><strong>Total à régler</strong><code style="font-size:18px">${totals.total.toFixed(2)} €</code></div>
       <div class="bank-line"><strong>Paiement</strong><code>${getInstallmentLabel()}</code></div>
@@ -1088,7 +1100,7 @@ function renderClothingOrder() {
           </div>
         </details>
       </div>
-      <div class="order-input" data-label="P.U."><span>${p.tshirt.toFixed(2)} €</span></div>
+      <div class="order-input" data-label="P.U."><span id="tshirt-unit">${p.tshirt.toFixed(2)} €</span></div>
       <div class="order-input" data-label="Taille">
         <select data-size-item="tshirt">
           <option value="">Taille</option>
@@ -1130,7 +1142,7 @@ function renderClothingOrder() {
           </div>
         </details>
       </div>
-      <div class="order-input" data-label="P.U."><span>${p.pantalon.toFixed(2)} €</span></div>
+      <div class="order-input" data-label="P.U."><span id="pantalon-unit">${p.pantalon.toFixed(2)} €</span></div>
       <div class="order-input" data-label="Taille">
         <select data-size-item="pantalon">
           <option value="">Taille</option>
@@ -1164,8 +1176,12 @@ function updateClothingSubtotals(totals = calculateTotals()) {
   if (!totals || !CONFIG) return;
   const tshirtSubtotal = g('tshirt-subtotal');
   const pantalonSubtotal = g('pantalon-subtotal');
-  if (tshirtSubtotal) tshirtSubtotal.textContent = `${(totals.tshirtQty * CONFIG.pricing.tshirt).toFixed(2)} €`;
-  if (pantalonSubtotal) pantalonSubtotal.textContent = `${(totals.pantalonQty * CONFIG.pricing.pantalon).toFixed(2)} €`;
+  const tshirtUnit = g('tshirt-unit');
+  const pantalonUnit = g('pantalon-unit');
+  if (tshirtUnit) tshirtUnit.textContent = totals.clothingFree ? 'Offert' : `${Number(CONFIG.pricing.tshirt).toFixed(2)} €`;
+  if (pantalonUnit) pantalonUnit.textContent = totals.clothingFree ? 'Offert' : `${Number(CONFIG.pricing.pantalon).toFixed(2)} €`;
+  if (tshirtSubtotal) tshirtSubtotal.textContent = `${(totals.tshirtQty * totals.unitTshirt).toFixed(2)} €`;
+  if (pantalonSubtotal) pantalonSubtotal.textContent = `${(totals.pantalonQty * totals.unitPantalon).toFixed(2)} €`;
   (totals.orderItems || []).forEach((item) => {
     const el = document.querySelector(`[data-order-subtotal="${item.id}"]`);
     if (el) el.textContent = `${Number(item.total || 0).toFixed(2)} €`;
