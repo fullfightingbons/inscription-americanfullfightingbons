@@ -1241,7 +1241,7 @@ async function loadConfig() {
     // Config par défaut si l'API est indisponible
     CONFIG = {
       clubName: 'AMERICAN FULL FIGHTING BONS EN CHABLAIS',
-      clubEmail: 'fullfightingbons@gmail.com',
+      clubEmail: 'club@americanfullfightingbons.fr',
       clubPhone: '06 99 95 81 77',
       clubLogo: '',
       dojoAddress: 'Centre Sportif Intercommunal des Voirons, 146 rue du Châtelard, 74890 Bons en Chablais',

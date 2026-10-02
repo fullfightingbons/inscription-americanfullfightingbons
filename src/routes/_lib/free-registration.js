@@ -312,7 +312,7 @@ async function storeRegistrationPdf(env, db, registrationId, payload, totals, ad
 
 async function sendFreeRegistrationAlert(env, payload, totals, registrationId, adherentId, pdfFile) {
   if (!env.BREVO_API_KEY) return { sent: false, reason: "brevo_not_configured" };
-  const clubRecipient = env.SIGNUP_ALERT_TO || "fullfightingbons@gmail.com";
+  const clubRecipient = env.SIGNUP_ALERT_TO || "club@americanfullfightingbons.fr";
   const registrantEmail = String(payload?.contact?.email || "").trim().toLowerCase();
   const from = env.SIGNUP_ALERT_FROM || "contact@americanfullfightingbons.fr";
   const nom = payload?.identity?.lastName || "";

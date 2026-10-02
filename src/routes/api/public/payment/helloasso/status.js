@@ -731,7 +731,7 @@ async function generateConfirmationReceipt(env, registration, dossier, adherentI
 
 export async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId, exercise, paymentSnapshot = null) {
   if (!env.BREVO_API_KEY) return;
-  const clubRecipient = env.SIGNUP_ALERT_TO || "fullfightingbons@gmail.com";
+  const clubRecipient = env.SIGNUP_ALERT_TO || "club@americanfullfightingbons.fr";
   const registrantRecipient = String(registration.email || "").trim().toLowerCase();
   const from = env.SIGNUP_ALERT_FROM || "contact@americanfullfightingbons.fr";
   const nom = registration.nom || "";

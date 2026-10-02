@@ -68,7 +68,7 @@ const SIRET = '924 704 612 00010';
 export const CLUB_NOM = 'American Full Fighting Bons en Chablais';
 const CLUB_ADRESSE_L1 = 'DOJO du Gymnase Intercommunal des Voirons';
 const CLUB_ADRESSE_L2 = '146 Rue du Chatelard, 74890 Bons-en-Chablais';
-const CLUB_EMAIL = 'fullfightingbons@gmail.com';
+const CLUB_EMAIL = 'club@americanfullfightingbons.fr';
 const CLUB_TEL = '06 99 95 81 77';
 const CLUB_SITE = 'americanfullfightingbons.fr';
 

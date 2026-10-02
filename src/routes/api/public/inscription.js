@@ -617,7 +617,7 @@ export function buildConfirmationEmailHtml(payload, totals, registrationId, resu
     <hr>
     <p>Votre dossier sera validé après confirmation du paiement HelloAsso. Vous recevrez votre licence FFK une fois le dossier complet.</p>
     ${resumeUrl ? `<p><strong>Votre paiement n'est pas terminé ?</strong> Vous pouvez le reprendre pendant 48 h sans ressaisir votre dossier : <a href="${resumeUrl}">reprendre mon paiement</a>.</p>` : ""}
-    <p>En cas de question : <a href="mailto:fullfightingbons@gmail.com">fullfightingbons@gmail.com</a></p>
+    <p>En cas de question : <a href="mailto:club@americanfullfightingbons.fr">club@americanfullfightingbons.fr</a></p>
     <p style="color:#888;font-size:12px">AMERICAN FULL FIGHTING BONS EN CHABLAIS — 15 Place Henri Boucher, 74890 Bons En Chablais</p>
   </body></html>`.trim();
 }
@@ -640,7 +640,7 @@ export function buildConfirmationEmailText(payload, totals, registrationId, resu
     "Votre dossier sera validé après confirmation du paiement HelloAsso.",
     ...(resumeUrl ? ["", `Votre paiement n'est pas terminé ? Reprenez-le pendant 48 h sans ressaisir votre dossier : ${resumeUrl}`] : []),
     "",
-    "En cas de question : fullfightingbons@gmail.com",
+    "En cas de question : club@americanfullfightingbons.fr",
   ].join("\n");
 }
 
@@ -674,7 +674,7 @@ async function sendConfirmationEmail(env, payload, totals, registrationId) {
 
 async function sendSignupAlert(env, payload, totals, registrationId, helloAssoUrl) {
   if (!env.BREVO_API_KEY) return { sent: false, reason: "brevo_api_key_missing" };
-  const to      = env.SIGNUP_ALERT_TO   || "fullfightingbons@gmail.com";
+  const to      = env.SIGNUP_ALERT_TO   || "club@americanfullfightingbons.fr";
   const from    = env.SIGNUP_ALERT_FROM || "contact@americanfullfightingbons.fr";
   const identity = payload.identity || {};
   const adherentEmail = String(payload.contact?.email || "").trim().toLowerCase();

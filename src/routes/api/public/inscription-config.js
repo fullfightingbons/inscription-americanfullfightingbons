@@ -11,7 +11,7 @@ import { CSE_ACCESS_CODE_KEY, isUsableCseCode } from "../../_lib/cse-access.js";
 const DEFAULT_CONFIG = {
   clubName:    "AMERICAN FULL FIGHTING BONS EN CHABLAIS",
   clubAddress: "15 Place Henri Boucher 74890 Bons En Chablais",
-  clubEmail:   "fullfightingbons@gmail.com",
+  clubEmail:   "club@americanfullfightingbons.fr",
   clubPhone:   "06 99 95 81 77",
   clubLogo:    "/assets/Logo_1_nnoir_copie-removebg-preview.png",
   dojoAddress: "Centre Sportif Intercommunal des Voirons, 146 rue du Châtelard, 74890 Bons en Chablais",

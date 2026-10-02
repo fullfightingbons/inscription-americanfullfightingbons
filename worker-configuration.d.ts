@@ -8,7 +8,7 @@ declare namespace Cloudflare {
 	interface Env {
 		APP_NAME: "AFFBC";
 		SUPABASE_EXPORT_DIR: "./cloudflare/export";
-		SIGNUP_ALERT_TO: "fullfightingbons@gmail.com";
+		SIGNUP_ALERT_TO: "club@americanfullfightingbons.fr";
 		SIGNUP_ALERT_FROM: "inscription@americanfullfightingbons.fr";
 		SIGNUP_ALERT_SENDER_NAME: "AFFBC Inscriptions";
 		SIGNUP_ALERT_TO_NAME: "AFFBC";
