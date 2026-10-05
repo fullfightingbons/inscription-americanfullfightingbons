@@ -659,6 +659,21 @@ export async function generateAdherentPdf(registration, photo = null, env = null
     y += 12;
   }
 
+  // Renouvellement : un certificat deja valide est reutilise (cf. _lib/medical-certificate.js).
+  if (totals.certificateReused) {
+    const frDay = (iso) => (/^\d{4}-\d{2}-\d{2}/.test(String(iso || '')) ? String(iso).slice(0, 10).split('-').reverse().join('/') : '');
+    const until = frDay(totals.certificateValidUntil);
+    ensureSpace(10);
+    p.setFillRgb(WARN_BG);
+    p.setStrokeRgb(ALERT);
+    p.setLineWidth(0.3);
+    p.roundedRect(ML/MM, y, CW/MM, 8, 1.5, 'B');
+    p.setFont('F1', 6);
+    p.text(`Certificat medical deja valide, reutilise - rien a fournir${until ? ` (valable jusqu au ${until})` : ''}`,
+           ML/MM + 3, y + 5, { color: INK });
+    y += 10;
+  }
+
   // Certificat obligatoire mais non fourni a l'inscription : l'adherent a coche
   // la case d'engagement (cf. _lib/medical-certificate.js). Encadre visible
   // aussi pour un mineur sans reponse « oui » (le bloc ci-dessus ne s'affiche

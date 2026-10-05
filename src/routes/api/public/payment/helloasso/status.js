@@ -196,7 +196,9 @@ async function upsertAdherent(db, payload, totals, exercise) {
     ville: String(contact.city || "").trim(),
     discipline: existing?.discipline || disciplineFromFormula(practice.formulaCode),
     droit_image: (payload.consents?.imageRights === "yes") ? 1 : 0,
-    certificat: totals.certificateRequired ? 0 : 1,
+    // Certificat obligatoire et non réutilisé → à (re)valider par le bureau. Réutilisé : la fiche garde
+    // son certificat validé (certificat_date n'est pas touchée : elle reste la date d'origine).
+    certificat: totals.certificateRequired && !totals.certificateReused ? 0 : 1,
     pass_region: practice.passRegionEnabled ? 1 : 0,
     montant_pass_region: totals.passRegionAmount || 0,
     reglement: 1,
@@ -798,6 +800,10 @@ export async function sendPaymentConfirmedAlert(env, registration, dossier, adhe
   // d'engagement (cf. _lib/medical-certificate.js). Le bureau et l'adhérent reçoivent le même
   // e-mail : on rappelle donc l'engagement et ce qui va se passer ensuite, sans parler à la 3e personne.
   const certificateDeferred = Boolean(dossier?.computedTotals?.certificateDeferred);
+  const certificateReused = Boolean(dossier?.computedTotals?.certificateReused);
+  const certificateReusedNote = certificateReused
+    ? "<p><strong>Certificat médical :</strong> un certificat déjà validé par le club est réutilisé, rien à fournir.</p>"
+    : "";
   const certificateNote = certificateDeferred
     ? "<p style=\"color:#a23521\"><strong>⚠️ Certificat médical à fournir.</strong> L'engagement de le remettre au plus vite a été pris à l'inscription ; à défaut, l'accès aux entraînements sera refusé. Un rappel automatique est envoyé à l'adhérent jusqu'à ce que le bureau ait validé le certificat (fiche adhérent, logiciel de gestion).</p>"
     : "";
@@ -836,7 +842,7 @@ export async function sendPaymentConfirmedAlert(env, registration, dossier, adhe
       <p><strong>Montant :</strong> ${Number(registration.montant_total || 0).toFixed(2)} €</p>
       <p><strong>Référence inscription :</strong> ${registration.id}</p>
       <p><strong>Fiche adhérent créée (ID) :</strong> ${adherentId}</p>
-      ${recapNote}${receiptNote}${certificateNote}
+      ${recapNote}${receiptNote}${certificateNote}${certificateReusedNote}
       <p style="color:#888;font-size:12px">
       La fiche adhérent est maintenant visible dans le logiciel de gestion,
       onglet <strong>Adhérents</strong>. Si une tenue a été commandée,
@@ -853,6 +859,7 @@ export async function sendPaymentConfirmedAlert(env, registration, dossier, adhe
                          pdfContent ? `PDF joint : ${fileName}` : "PDF non généré automatiquement — à régénérer depuis la fiche adhérent.",
                          receiptTextLine,
                          certificateDeferred ? "Certificat médical à fournir : engagement pris à l'inscription, rappels automatiques jusqu'à validation par le bureau." : null,
+                         certificateReused ? "Certificat médical : certificat déjà validé réutilisé, rien à fournir." : null,
       ].filter(Boolean).join("\n"),
                          ...(attachment.length ? { attachment } : {}),
     };

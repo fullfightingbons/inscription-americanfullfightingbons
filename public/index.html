@@ -482,16 +482,22 @@
             </div>
             <div id="qs-grid" class="qs-grid"></div>
             <div id="medical-upload-block" class="conditional" hidden>
+              <div id="certificate-reuse-note" class="info-banner" hidden>
+                ✅ <strong>Votre certificat médical est toujours valable</strong><span id="certificate-reuse-until"></span> : il a déjà été validé par le club et sera réutilisé. <strong>Vous n'avez rien à fournir.</strong> Si votre état de santé a évolué depuis sa délivrance, joignez un nouveau certificat ci-dessous.
+              </div>
               <label class="field field-full">
                 <span>Certificat médical / certificat compétition</span>
                 <input id="medicalCertificate" type="file" accept="application/pdf,image/*">
               </label>
-              <div class="info-banner">Pour rappel, un certificat médical reste valable <strong>3 ans</strong>, sauf évolution de l'état de santé du pratiquant depuis sa délivrance — dans ce cas, un nouveau certificat est nécessaire même si les 3 ans ne sont pas écoulés.</div>
-              <div class="info-banner">Vous n'avez pas encore votre certificat ? Vous pouvez poursuivre l'inscription sans le joindre en cochant la case ci-dessous. Il devra alors être fourni au plus vite : vous recevrez un rappel par e-mail tant qu'il n'aura pas été validé par le bureau.</div>
-              <label class="field check-field field-full">
-                <input id="certificateCommitment" type="checkbox">
-                <span>Je m'engage à fournir le certificat médical au plus vite, à défaut, l'accès aux entraînements me sera refusé.</span>
-              </label>
+              <div class="info-banner">Le certificat médical d'aptitude est valable <strong>3 ans</strong>, sauf évolution de l'état de santé du pratiquant depuis sa délivrance — dans ce cas, un nouveau certificat est nécessaire même si les 3 ans ne sont pas écoulés.</div>
+              <div class="info-banner">L'ajout du certificat peut aussi se faire <strong>directement depuis l'espace membre</strong> de l'adhérent.</div>
+              <div id="certificate-commitment-block">
+                <div class="info-banner">Vous n'avez pas encore votre certificat ? Vous pouvez poursuivre l'inscription sans le joindre en cochant la case ci-dessous. Il devra alors être fourni au plus vite : vous recevrez un rappel par e-mail tant qu'il n'aura pas été validé par le bureau.</div>
+                <label class="field check-field field-full">
+                  <input id="certificateCommitment" type="checkbox">
+                  <span>Je m'engage à fournir le certificat médical au plus vite, à défaut, l'accès aux entraînements me sera refusé.</span>
+                </label>
+              </div>
             </div>
             <div class="panel-actions">
               <button type="button" class="btn" data-prev>Retour</button>

@@ -1,5 +1,6 @@
 import { badRequest, json } from "../../_lib/data.js";
 import { normalizeNameForComparison, normalizeDateForComparison, normalizeEmail } from "../../_lib/helpers.js";
+import { findReusableCertificate } from "../../_lib/medical-certificate.js";
 
 function normalizePersonName(value) {
   return String(value || "").trim();
@@ -47,7 +48,7 @@ export async function onRequestGet(context) {
     }
 
     const { results } = await context.env.DB
-      .prepare(`SELECT nom, prenom, naissance, email, discipline FROM adherents`)
+      .prepare(`SELECT id, nom, prenom, naissance, email, discipline FROM adherents`)
       .all();
     const adherent = (results || []).find(
       (a) => normalizeNameForComparison(a.nom) === lastName && normalizeNameForComparison(a.prenom) === firstName,
@@ -89,12 +90,19 @@ export async function onRequestGet(context) {
       });
     }
 
+    // Identité entièrement vérifiée (nom, prénom, naissance, e-mail) : on indique au formulaire si un
+    // certificat médical déjà validé est réutilisable, pour ne pas le redemander. Purement informatif :
+    // le serveur refait le calcul à l'envoi du dossier. Jamais bloquant pour l'éligibilité.
+    const reuse = await findReusableCertificate(context.env.DB, adherent.id);
+
     return json({
       data: {
         checked: true,
         renewalVerified: true,
         eligibleForBureauRate: hasBureauDiscipline(adherent.discipline),
         reason: hasBureauDiscipline(adherent.discipline) ? "eligible" : "discipline_missing",
+        certificateReusable: reuse.reusable === true,
+        certificateValidUntil: reuse.reusable === true ? reuse.validUntil : null,
       },
       error: null,
     });

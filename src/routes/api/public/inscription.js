@@ -24,7 +24,7 @@ import {
 } from "../../_lib/boutique-stock.js";
 import { finalizeFreeRegistration } from "../../_lib/free-registration.js";
 import { CSE_ACCESS_FORMULA, readCseAccessHeader, verifyCseAccessCode } from "../../_lib/cse-access.js";
-import { resolveCertificateSubmission } from "../../_lib/medical-certificate.js";
+import { findReusableCertificate, resolveCertificateSubmission } from "../../_lib/medical-certificate.js";
 
 const MAX_FILE_SIZE = 8 * 1024 * 1024; // 8 Mo
 const FETCH_TIMEOUT_MS = 12_000; // 12 s pour les appels externes
@@ -893,13 +893,35 @@ export async function onRequestPost(context) {
     // AVANT toute écriture (brouillon, R2, HelloAsso) : un refus ici ne laisse
     // rien à nettoyer.
     const medicalCertificateFile = formData.get("medicalCertificate");
+    const hasCertificateFile = medicalCertificateFile instanceof File && medicalCertificateFile.size > 0;
+
+    // Renouvellement : un certificat déjà validé et encore dans sa durée de validité (3 ans au
+    // plus) est réutilisé, l'adhérent n'a rien à fournir. `matchingAdherent` n'est posé que si
+    // nom + prénom + date de naissance + e-mail correspondent à une fiche existante (vérifié
+    // plus haut). Jamais en cas de « oui » au questionnaire de santé : l'état de santé a pu
+    // évoluer depuis la délivrance, un nouveau certificat est alors nécessaire (cf. mention du
+    // formulaire). Jamais non plus si une pièce est jointe : elle est plus récente.
+    const qsPositive = REQUIRED_QS_KEYS.some((key) => payload?.health?.qsSport?.[key] === "yes");
+    const certificateReuse =
+      validation.certificateRequired && !qsPositive && !hasCertificateFile && matchingAdherent?.id
+        ? await findReusableCertificate(context.env.DB, matchingAdherent.id)
+        : null;
+
     const certificateSubmission = resolveCertificateSubmission({
       required: validation.certificateRequired,
-      hasFile: medicalCertificateFile instanceof File && medicalCertificateFile.size > 0,
+      hasFile: hasCertificateFile,
       commitment: toBool(payload?.health?.certificateCommitment),
+      reusable: certificateReuse?.reusable === true,
     });
     if (certificateSubmission.error) return badRequest(certificateSubmission.error);
     totals.certificateDeferred = certificateSubmission.deferred;
+    totals.certificateReused = certificateSubmission.reused;
+    if (certificateSubmission.reused) {
+      // Date d'origine du certificat (jamais celle d'aujourd'hui) : la réutilisation ne prolonge pas
+      // sa validité ; c'est aussi ce que lira le renouvellement suivant.
+      totals.certificateReferenceDate = certificateReuse.referenceDate;
+      totals.certificateValidUntil = certificateReuse.validUntil;
+    }
     // Trace horodatée côté serveur de l'engagement (dossier_json) : c'est la
     // date de référence du premier rappel et la preuve de la case cochée.
     payload.health = {
@@ -981,7 +1003,7 @@ export async function onRequestPost(context) {
     uploadedDocuments.photoIdentity = await uploadRequiredFile(context.env, registrationId, formData.get("photoIdentity"), "photo-identite", true);
     uploadedFileRefs.push(uploadedDocuments.photoIdentity);
 
-    if (validation.certificateRequired && !certificateSubmission.deferred) {
+    if (validation.certificateRequired && !certificateSubmission.deferred && !certificateSubmission.reused) {
       uploadedDocuments.medicalCertificate = await uploadRequiredFile(context.env, registrationId, formData.get("medicalCertificate"), "certificat-medical", false);
       uploadedFileRefs.push(uploadedDocuments.medicalCertificate);
     }

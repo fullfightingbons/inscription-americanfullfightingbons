@@ -58,6 +58,21 @@ let currentStep = 0;
 const TOTAL_STEPS = 8;
 let bureauEligibility = { checked: false, renewalVerified: false, eligibleForBureauRate: false, reason: 'missing_fields' };
 let bureauEligibilityTimer = null;
+
+// Renouvellement dont l'identité est vérifiée (nom, prénom, naissance, e-mail) ET dont un certificat médical
+// déjà validé reste dans sa durée de validité (3 ans) : on ne le redemande pas. Exception : une réponse
+// « oui » au questionnaire de santé impose un nouveau certificat (l'état de santé a pu évoluer). Le serveur
+// refait ce calcul à l'envoi, ceci n'est que l'affichage.
+function certificateReusable() {
+  return bureauEligibility.renewalVerified === true
+    && bureauEligibility.certificateReusable === true
+    && !Object.values(collectQs()).some(v => v === 'yes');
+}
+
+function formatIsoDateFr(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : '';
+}
 // Non vide = inscriptions fermées au public, mais accès CSE Thalès validé (formule verrouillée sur cse_thales).
 let cseAccessCode = '';
 
@@ -608,12 +623,14 @@ async function refreshBureauEligibility() {
   if (typeInscription !== 'renouvellement') {
     bureauEligibility = { checked: true, renewalVerified: false, eligibleForBureauRate: false, reason: 'not_renewal' };
     syncBureauFormulaOption();
+    updateConditionals();
     return;
   }
 
   if (!val('lastName') || !val('firstName') || !val('birthDate') || !val('email')) {
     bureauEligibility = { checked: false, renewalVerified: false, eligibleForBureauRate: false, reason: 'missing_fields' };
     syncBureauFormulaOption();
+    updateConditionals();
     return;
   }
 
@@ -626,6 +643,7 @@ async function refreshBureauEligibility() {
   }
 
   syncBureauFormulaOption();
+  updateConditionals();
   updateSummary();
 }
 
@@ -727,6 +745,16 @@ function updateConditionals() {
   const qsPositive = Object.values(qsSport).some(v => v === 'yes');
   const certRequired = minor || qsPositive;
   show('medical-upload-block', certRequired);
+
+  // Certificat déjà validé et encore valable : bandeau « rien à fournir », sans case d'engagement.
+  const reusable = certRequired && certificateReusable();
+  show('certificate-reuse-note', reusable);
+  show('certificate-commitment-block', !reusable);
+  const reuseUntil = g('certificate-reuse-until');
+  if (reuseUntil) {
+    const until = formatIsoDateFr(bureauEligibility.certificateValidUntil);
+    reuseUntil.textContent = until ? ` (jusqu'au ${until})` : '';
+  }
 }
 
 // ─── Récapitulatif (sidebar + paiement) ──────────────────────────────────────
@@ -941,9 +969,10 @@ function validateStep(step) {
       const minor = isMinor(val('birthDate'));
       const qsPositive = Object.values(qs).some(v => v === 'yes');
       if (minor || qsPositive) {
-        // Certificat obligatoire : pièce jointe OU case d'engagement à le fournir au plus vite.
+        // Certificat obligatoire : pièce jointe, OU certificat déjà validé réutilisable (renouvellement),
+        // OU case d'engagement à le fournir au plus vite.
         const cert = g('medicalCertificate');
-        if (!cert?.files?.length && !checked('certificateCommitment')) {
+        if (!cert?.files?.length && !checked('certificateCommitment') && !certificateReusable()) {
           return 'Le certificat médical est obligatoire pour votre profil : joignez-le, ou cochez la case d\'engagement à le fournir au plus vite.';
         }
       }
@@ -1454,6 +1483,7 @@ function buildPayload() {
       // exigé ET qu'aucune pièce n'est jointe (le serveur revérifie les deux).
       certificateCommitment: (minor || Object.values(qs).some(v => v === 'yes'))
         && !g('medicalCertificate')?.files?.length
+        && !certificateReusable()
         && checked('certificateCommitment'),
     },
     clothingOrder: {
