@@ -794,6 +794,14 @@ export async function sendPaymentConfirmedAlert(env, registration, dossier, adhe
     ? "<p><strong>Pièce jointe :</strong> le dossier PDF récapitulatif est joint à cet email.</p>"
     : "<p style=\"color:#a23521\"><strong>⚠️ Le PDF récapitulatif n'a pas pu être généré automatiquement.</strong> Il peut être régénéré manuellement depuis la fiche adhérent dans le logiciel de gestion.</p>";
 
+  // Certificat médical obligatoire mais non fourni à l'inscription : l'adhérent a coché la case
+  // d'engagement (cf. _lib/medical-certificate.js). Le bureau et l'adhérent reçoivent le même
+  // e-mail : on rappelle donc l'engagement et ce qui va se passer ensuite, sans parler à la 3e personne.
+  const certificateDeferred = Boolean(dossier?.computedTotals?.certificateDeferred);
+  const certificateNote = certificateDeferred
+    ? "<p style=\"color:#a23521\"><strong>⚠️ Certificat médical à fournir.</strong> L'engagement de le remettre au plus vite a été pris à l'inscription ; à défaut, l'accès aux entraînements sera refusé. Un rappel automatique est envoyé à l'adhérent jusqu'à ce que le bureau ait validé le certificat (fiche adhérent, logiciel de gestion).</p>"
+    : "";
+
   // Le message est construit par une fonction pour pouvoir être refait SANS le reçu si Brevo
   // refusait l'envoi : le reçu ne doit jamais rendre l'e-mail de confirmation moins fiable.
   const buildMessage = (withReceipt) => {
@@ -828,7 +836,7 @@ export async function sendPaymentConfirmedAlert(env, registration, dossier, adhe
       <p><strong>Montant :</strong> ${Number(registration.montant_total || 0).toFixed(2)} €</p>
       <p><strong>Référence inscription :</strong> ${registration.id}</p>
       <p><strong>Fiche adhérent créée (ID) :</strong> ${adherentId}</p>
-      ${recapNote}${receiptNote}
+      ${recapNote}${receiptNote}${certificateNote}
       <p style="color:#888;font-size:12px">
       La fiche adhérent est maintenant visible dans le logiciel de gestion,
       onglet <strong>Adhérents</strong>. Si une tenue a été commandée,
@@ -844,6 +852,7 @@ export async function sendPaymentConfirmedAlert(env, registration, dossier, adhe
                          `Fiche adhérent ID : ${adherentId}`,
                          pdfContent ? `PDF joint : ${fileName}` : "PDF non généré automatiquement — à régénérer depuis la fiche adhérent.",
                          receiptTextLine,
+                         certificateDeferred ? "Certificat médical à fournir : engagement pris à l'inscription, rappels automatiques jusqu'à validation par le bureau." : null,
       ].filter(Boolean).join("\n"),
                          ...(attachment.length ? { attachment } : {}),
     };

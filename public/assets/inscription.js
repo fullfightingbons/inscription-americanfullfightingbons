@@ -191,6 +191,8 @@ function applyDraft(data) {
       radios.forEach(r => { if (r.value === data.qsSport[key]) r.checked = true; });
     }
   }
+  // Engagement à fournir le certificat médical (case de l'étape Santé)
+  set('certificateCommitment', data.certificateCommitment);
   // Commandes
   if (data.tshirtQty !== undefined) {
     const el = document.querySelector('#clothing-order input[data-item="tshirt"]');
@@ -367,6 +369,7 @@ function collectAllFields() {
     legalRole: val('legalRole'), legalCity: val('legalCity'),
     legalSignedAt: val('legalSignedAt'), legalSignatureName: val('legalSignatureName'),
     qsSport: collectQs(),
+    certificateCommitment: checked('certificateCommitment'),
     ...collectClothing(),
     extraOrderItems: collectExtraOrderItems(),
     decathlonLinkOpened,
@@ -938,8 +941,11 @@ function validateStep(step) {
       const minor = isMinor(val('birthDate'));
       const qsPositive = Object.values(qs).some(v => v === 'yes');
       if (minor || qsPositive) {
+        // Certificat obligatoire : pièce jointe OU case d'engagement à le fournir au plus vite.
         const cert = g('medicalCertificate');
-        if (!cert?.files?.length) return 'Le certificat médical est obligatoire pour votre profil.';
+        if (!cert?.files?.length && !checked('certificateCommitment')) {
+          return 'Le certificat médical est obligatoire pour votre profil : joignez-le, ou cochez la case d\'engagement à le fournir au plus vite.';
+        }
       }
       return null;
     }
@@ -1444,6 +1450,11 @@ function buildPayload() {
     },
     health: {
       qsSport: qs,
+      // Engagement à fournir le certificat plus tard : n'a de sens que si le certificat est
+      // exigé ET qu'aucune pièce n'est jointe (le serveur revérifie les deux).
+      certificateCommitment: (minor || Object.values(qs).some(v => v === 'yes'))
+        && !g('medicalCertificate')?.files?.length
+        && checked('certificateCommitment'),
     },
     clothingOrder: {
       tshirtQty: clothing.tshirtQty,

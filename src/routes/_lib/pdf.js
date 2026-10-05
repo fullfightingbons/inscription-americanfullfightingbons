@@ -649,12 +649,35 @@ export async function generateAdherentPdf(registration, photo = null, env = null
     p.setLineWidth(0.3);
     p.roundedRect(ML/MM, y, CW/MM, 10, 1.5, 'B');
     p.setFont('F1', 6);
-    p.text('! Reponse(s) affirmative(s) - un certificat medical est joint au dossier',
+    p.text(totals.certificateDeferred
+             ? '! Reponse(s) affirmative(s) - certificat medical a fournir (engagement ci-dessous)'
+             : '! Reponse(s) affirmative(s) - un certificat medical est joint au dossier',
            ML/MM + 3, y + 4.5, { color: INK });
     p.setFont('F1', 5.2);
     p.text(`Questions : ${positives.join(', ')}`,
            ML/MM + 3, y + 8, { color: MUTED });
     y += 12;
+  }
+
+  // Certificat obligatoire mais non fourni a l'inscription : l'adherent a coche
+  // la case d'engagement (cf. _lib/medical-certificate.js). Encadre visible
+  // aussi pour un mineur sans reponse « oui » (le bloc ci-dessus ne s'affiche
+  // que sur reponse positive).
+  if (totals.certificateDeferred) {
+    const engagedOn = String(hl.certificateCommitmentAt || '').slice(0, 10);
+    const engagedOnFr = /^\d{4}-\d{2}-\d{2}$/.test(engagedOn) ? engagedOn.split('-').reverse().join('/') : '';
+    ensureSpace(14);
+    p.setFillRgb(WARN_BG);
+    p.setStrokeRgb(ALERT);
+    p.setLineWidth(0.3);
+    p.roundedRect(ML/MM, y, CW/MM, 12, 1.5, 'B');
+    p.setFont('F1', 6);
+    p.text(`! Certificat medical a fournir - engagement coche a l inscription${engagedOnFr ? ` (${engagedOnFr})` : ''}`,
+           ML/MM + 3, y + 4.5, { color: INK });
+    p.setFont('F1', 5.2);
+    p.text('Je m engage a fournir le certificat medical au plus vite, a defaut, l acces aux entrainements me sera refuse.',
+           ML/MM + 3, y + 8.5, { color: MUTED });
+    y += 14;
   }
   y += 3;
 

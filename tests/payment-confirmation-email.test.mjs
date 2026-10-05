@@ -251,3 +251,24 @@ test("adhérent sans e-mail : le reçu part au moins au club (comportement d'ori
   assert.deepEqual(calls[0].body.to.map((t) => t.email), ["club@example.com"]);
   assert.equal(calls[0].body.attachment.length, 2);
 });
+
+// ── Certificat médical à fournir (engagement coché à l'inscription) ──────────
+
+test("engagement à fournir le certificat : l'e-mail le signale au club comme à l'adhérent", async () => {
+  const { calls } = mockBrevo();
+  const dossier = makeDossier({ health: { qsSport: { chestPain: "yes" }, certificateCommitment: true } });
+  dossier.computedTotals = { ...dossier.computedTotals, certificateRequired: true, certificateDeferred: true };
+  await sendPaymentConfirmedAlert(makeEnv(), REGISTRATION, dossier, ADHERENT_ID, EXERCISE, SNAPSHOT_PAID);
+
+  const { htmlContent, textContent } = calls[0].body;
+  assert.ok(htmlContent.includes("Certificat médical à fournir"));
+  assert.ok(htmlContent.includes("l'accès aux entraînements sera refusé"));
+  assert.ok(textContent.includes("Certificat médical à fournir"));
+});
+
+test("sans engagement, aucune mention « certificat à fournir » dans l'e-mail", async () => {
+  const { calls } = mockBrevo();
+  await sendPaymentConfirmedAlert(makeEnv(), REGISTRATION, makeDossier(), ADHERENT_ID, EXERCISE, SNAPSHOT_PAID);
+  assert.ok(!calls[0].body.htmlContent.includes("Certificat médical à fournir"));
+  assert.ok(!calls[0].body.textContent.includes("Certificat médical à fournir"));
+});

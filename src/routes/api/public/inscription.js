@@ -24,6 +24,7 @@ import {
 } from "../../_lib/boutique-stock.js";
 import { finalizeFreeRegistration } from "../../_lib/free-registration.js";
 import { CSE_ACCESS_FORMULA, readCseAccessHeader, verifyCseAccessCode } from "../../_lib/cse-access.js";
+import { resolveCertificateSubmission } from "../../_lib/medical-certificate.js";
 
 const MAX_FILE_SIZE = 8 * 1024 * 1024; // 8 Mo
 const FETCH_TIMEOUT_MS = 12_000; // 12 s pour les appels externes
@@ -883,6 +884,30 @@ export async function onRequestPost(context) {
     );
     totals.certificateRequired = validation.certificateRequired;
 
+    // ── Certificat médical : pièce jointe OU engagement à la fournir ─────────
+    // Obligatoire pour un mineur ou si le QS-Sport comporte un « oui ». Si la
+    // pièce n'est pas disponible le jour de l'inscription, l'adhérent peut
+    // cocher la case d'engagement et poursuivre : la fiche reste alors
+    // « certificat manquant » côté gestion, avec rappels e-mail automatiques
+    // jusqu'à validation (cf. checkCertificatsEnAttente, repo gestion). Décidé
+    // AVANT toute écriture (brouillon, R2, HelloAsso) : un refus ici ne laisse
+    // rien à nettoyer.
+    const medicalCertificateFile = formData.get("medicalCertificate");
+    const certificateSubmission = resolveCertificateSubmission({
+      required: validation.certificateRequired,
+      hasFile: medicalCertificateFile instanceof File && medicalCertificateFile.size > 0,
+      commitment: toBool(payload?.health?.certificateCommitment),
+    });
+    if (certificateSubmission.error) return badRequest(certificateSubmission.error);
+    totals.certificateDeferred = certificateSubmission.deferred;
+    // Trace horodatée côté serveur de l'engagement (dossier_json) : c'est la
+    // date de référence du premier rappel et la preuve de la case cochée.
+    payload.health = {
+      ...(payload.health || {}),
+      certificateCommitment: certificateSubmission.commitment,
+      certificateCommitmentAt: certificateSubmission.deferred ? new Date().toISOString() : null,
+    };
+
     // ── Quantités tenue effectivement facturées (post-minimum serveur) ───────
     // calculateTotals() impose tshirtQty/pantalonQty ≥ 1 pour une nouvelle
     // adhésion, même si le payload envoyait 0 ou omettait ces champs. On
@@ -956,7 +981,7 @@ export async function onRequestPost(context) {
     uploadedDocuments.photoIdentity = await uploadRequiredFile(context.env, registrationId, formData.get("photoIdentity"), "photo-identite", true);
     uploadedFileRefs.push(uploadedDocuments.photoIdentity);
 
-    if (validation.certificateRequired) {
+    if (validation.certificateRequired && !certificateSubmission.deferred) {
       uploadedDocuments.medicalCertificate = await uploadRequiredFile(context.env, registrationId, formData.get("medicalCertificate"), "certificat-medical", false);
       uploadedFileRefs.push(uploadedDocuments.medicalCertificate);
     }

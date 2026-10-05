@@ -342,6 +342,7 @@ async function sendFreeRegistrationAlert(env, payload, totals, registrationId, a
         <p><strong>Montant :</strong> 0,00 € (aucun paiement HelloAsso requis pour ce tarif)</p>
         <p><strong>Référence inscription :</strong> ${registrationId}</p>
         <p><strong>Fiche adhérent créée (ID) :</strong> ${adherentId}</p>
+        ${totals?.certificateDeferred ? `<p style="color:#a23521"><strong>⚠️ Certificat médical à fournir.</strong> L'engagement de le remettre au plus vite a été pris à l'inscription ; à défaut, l'accès aux entraînements sera refusé. Un rappel automatique est envoyé à l'adhérent jusqu'à ce que le bureau ait validé le certificat (fiche adhérent, logiciel de gestion).</p>` : ""}
         <p style="color:#888;font-size:12px">
         La fiche adhérent est maintenant visible dans le logiciel de gestion, onglet <strong>Adhérents</strong>.
         </p>
@@ -352,7 +353,8 @@ async function sendFreeRegistrationAlert(env, payload, totals, registrationId, a
           `Email : ${payload?.contact?.email || ""}`,
           `Référence : ${registrationId}`,
           `Fiche adhérent ID : ${adherentId}`,
-        ].join("\n"),
+          totals?.certificateDeferred ? "Certificat médical à fournir : engagement pris à l'inscription, rappels automatiques jusqu'à validation par le bureau." : null,
+        ].filter(Boolean).join("\n"),
         attachment,
       }),
     });

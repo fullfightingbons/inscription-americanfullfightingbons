@@ -66,3 +66,24 @@ test("fetchPhotoDocument returns null when documents_json has no photo reference
   const result = await fetchPhotoDocument({}, "{}");
   assert.equal(result, null);
 });
+
+test("generateAdherentPdf : certificat à fournir (engagement) — mineur sans « oui » et adulte avec « oui » ne lèvent jamais", async () => {
+  const deferredMinor = {
+    ...MINIMAL_REGISTRATION,
+    health: { qsSport: {}, certificateCommitment: true, certificateCommitmentAt: "2026-10-04T09:30:00.000Z" },
+    computedTotals: { certificateRequired: true, certificateDeferred: true },
+  };
+  const deferredPositive = {
+    ...MINIMAL_REGISTRATION,
+    health: { qsSport: { chestPain: "yes" }, certificateCommitment: true },
+    computedTotals: { certificateRequired: true, certificateDeferred: true },
+  };
+  for (const registration of [deferredMinor, deferredPositive]) {
+    const bytes = await generateAdherentPdf(registration, null, null);
+    assert.ok(isPdf(bytes));
+  }
+  // Sans engagement, la taille doit rester inférieure à celle du dossier avec encadré supplémentaire.
+  const plain = await generateAdherentPdf(MINIMAL_REGISTRATION, null, null);
+  const withBox = await generateAdherentPdf(deferredMinor, null, null);
+  assert.ok(withBox.length > plain.length, "l'encadré « certificat à fournir » doit ajouter du contenu au PDF");
+});
