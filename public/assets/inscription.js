@@ -1859,9 +1859,6 @@ async function submitForm(event) {
           <div class="success-note">
             📧 Le club a été notifié par email. N'hésitez pas à les contacter si vous avez des questions.
           </div>
-          <div class="success-actions" style="margin-top:18px">
-            <button type="button" class="btn" onclick="window.location.reload()">Déposer une autre inscription</button>
-          </div>
         `;
       }
       return;
@@ -2112,7 +2109,6 @@ function showPaymentSuccess(panel, paymentData = null) {
     </div>
     <div class="success-actions" style="margin-top:18px">
       <button type="button" class="btn primary" id="family-member-button">👪 Inscrire un autre membre de la famille</button>
-      <button type="button" class="btn" onclick="window.location.reload()">Déposer une autre inscription</button>
     </div>
   `;
   panel.querySelector('#family-member-button')?.addEventListener('click', startFamilyMemberRegistration);
@@ -2130,10 +2126,7 @@ function showPaymentPending(form, panel, registrationId, paymentData = null) {
       📋 <strong>Référence de votre dossier :</strong> ${registrationId}<br>
       Conservez cette référence. Si votre fiche n'apparaît pas dans les 24h, contactez le club en indiquant cette référence.
     </div>
-    <div class="success-actions" style="margin-top:18px">
-      <button type="button" class="btn primary" onclick="recheckStatus('${registrationId}')">Vérifier à nouveau</button>
-      <button type="button" class="btn" onclick="window.location.reload()">Nouvelle inscription</button>
-    </div>
+    <p>Vous pouvez recharger cette page dans quelques minutes pour revérifier : elle se met à jour dès que le paiement est confirmé.</p>
   `;
 }
 
@@ -2270,23 +2263,6 @@ async function resumePayment(panel, registrationId) {
     if (btn) { btn.disabled = false; btn.textContent = 'Reprendre mon paiement'; }
   }
 }
-
-// Expose pour le bouton "Vérifier à nouveau"
-window.recheckStatus = async function(registrationId) {
-  const panel = g('success-panel');
-  if (panel) panel.innerHTML = '<p>Vérification en cours…</p>';
-  try {
-    const res = await fetch(`${STATUS_URL}?registrationId=${encodeURIComponent(registrationId)}`, { cache: 'no-store' });
-    const data = await res.json().catch(() => null);
-    if (data?.data?.paid && !data?.data?.processing) {
-      showPaymentSuccess(panel, data?.data || null);
-    } else {
-      showPaymentPending(null, panel, registrationId, data?.data || null);
-    }
-  } catch (e) {
-    if (panel) panel.innerHTML = `<p class="alert">Erreur de connexion. Veuillez réessayer. Référence : ${registrationId}</p>`;
-  }
-};
 
 // ─── Initialisation ───────────────────────────────────────────────────────────
 
