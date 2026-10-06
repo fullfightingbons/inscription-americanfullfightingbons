@@ -51,6 +51,17 @@ const STEP_LABELS = [
   'Santé', 'Commandes', 'Engagements', 'Paiement',
 ];
 
+// ─── Appareil tactile (téléphone / tablette) ──────────────────────────────────
+// Certaines aides ne s'activent QUE lorsque le pointeur principal est tactile
+// (téléphone, tablette) : le parcours sur ordinateur n'est pas modifié.
+const IS_TOUCH_DEVICE = (() => {
+  try { return Boolean(window.matchMedia && window.matchMedia('(pointer: coarse)').matches); }
+  catch (e) { return false; }
+})();
+
+// Même plafond que le serveur (MAX_FILE_SIZE dans src/routes/api/public/inscription.js).
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+
 // ─── État ─────────────────────────────────────────────────────────────────────
 
 let CONFIG = null;
@@ -140,7 +151,23 @@ function loadDraft() {
   } catch (e) { return null; }
 }
 
+// Enregistrement automatique du brouillon (appareils tactiles uniquement, cf. init()).
+// Désactivé dès que le brouillon est effacé volontairement (dossier validé,
+// bouton « Effacer ») pour qu'il ne soit jamais recréé par l'enregistrement
+// déclenché au changement de page.
+let draftAutosaveEnabled = true;
+
+function autosaveDraftIfNeeded() {
+  if (!IS_TOUCH_DEVICE || !draftAutosaveEnabled) return;
+  const form = g('signup-form');
+  if (!form || form.hidden) return;
+  // Rien de saisi : on ne crée pas de brouillon vide.
+  if (!(val('lastName') || val('firstName') || val('email') || val('phonePrimary'))) return;
+  saveDraft();
+}
+
 function clearDraft() {
+  draftAutosaveEnabled = false;
   localStorage.removeItem(DRAFT_KEY);
   const badge = g('draft-badge');
   if (badge) badge.textContent = 'Brouillon non enregistré';
@@ -1527,51 +1554,242 @@ const PHOTO_MAX_DIMENSION    = 800;         // px, plus grand côté
 const PHOTO_JPEG_QUALITY     = 0.8;
 const PHOTO_SKIP_UNDER_BYTES = 400 * 1024;  // déjà assez léger : on ne retouche pas
 
-async function compressPhotoFile(file) {
-  if (!file || !(file instanceof File)) return file;
-  if (!file.type || !file.type.startsWith('image/')) return file;
-  if (file.size <= PHOTO_SKIP_UNDER_BYTES) return file;
-  if (typeof createImageBitmap !== 'function') return file;
+// Justificatifs (certificat médical, Pass Région, tarif réduit) envoyés en
+// PHOTO depuis un téléphone : réduits pour rester lisibles mais légers.
+// (Le serveur les convertit ensuite en PDF — cf. image-to-pdf.js.)
+const DOCUMENT_MAX_DIMENSION = 2200;        // px, plus grand côté : un A4 reste lisible
+const DOCUMENT_JPEG_QUALITY  = 0.85;
 
+// Pièces jointes du formulaire : libellé affiché dans les messages + étape où elles se choisissent.
+const FILE_RULES = {
+  photoIdentity:      { id: 'photoIdentity',      label: 'la photo d\'identité',             step: 1, photo: true },
+  passRegionDocument: { id: 'passRegionDocument', label: 'le justificatif Pass Région',      step: 3 },
+  proProofDocument:   { id: 'proProofDocument',   label: 'le justificatif de tarif réduit',  step: 3 },
+  medicalCertificate: { id: 'medicalCertificate', label: 'le certificat médical',            step: 4 },
+};
+const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+
+// Le `type` d'un fichier choisi depuis un téléphone est parfois vide : on se
+// rabat alors sur l'extension (le serveur vérifie de toute façon le contenu réel).
+function isPdfFile(file) {
+  return Boolean(file) && (file.type === 'application/pdf' || (!file.type && /\.pdf$/i.test(file.name || '')));
+}
+function looksLikeImage(file) {
+  return Boolean(file) && ((file.type || '').startsWith('image/')
+    || (!file.type && /\.(jpe?g|png|heic|heif|webp)$/i.test(file.name || '')));
+}
+
+// Décode une image pour la dessiner sur un canvas.
+// 1) createImageBitmap (rapide, applique la rotation EXIF) ;
+// 2) repli pour les navigateurs mobiles anciens : <img> alimentée par une URL
+//    data: (la CSP du site n'autorise pas blob: pour les images).
+async function decodeImageForCanvas(file) {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+      return { source: bitmap, width: bitmap.width, height: bitmap.height, release: () => { bitmap.close?.(); } };
+    } catch (e) { /* repli ci-dessous */ }
+  }
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('lecture impossible'));
+    reader.readAsDataURL(file);
+  });
+  const img = await new Promise((resolve, reject) => {
+    const el = new Image();
+    el.onload = () => resolve(el);
+    el.onerror = () => reject(new Error('image non décodable'));
+    el.src = dataUrl;
+  });
+  return { source: img, width: img.naturalWidth, height: img.naturalHeight, release: () => {} };
+}
+
+// Redimensionne + recompresse en JPEG. Renvoie un File, ou null au moindre souci
+// (format non décodable, mémoire…) : l'appelant retombe alors sur l'original.
+// `flatten` peint un fond blanc avant le dessin (PNG transparent → JPEG sans
+// fond noir) ; utilisé pour les documents, pas pour la photo d'identité.
+async function reencodeImageAsJpeg(file, { maxDimension, quality, flatten }) {
+  let decoded = null;
   try {
-    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
-    const scale = Math.min(1, PHOTO_MAX_DIMENSION / Math.max(bitmap.width, bitmap.height));
-    const targetW = Math.max(1, Math.round(bitmap.width * scale));
-    const targetH = Math.max(1, Math.round(bitmap.height * scale));
+    decoded = await decodeImageForCanvas(file);
+    const { source, width, height } = decoded;
+    if (!width || !height) return null;
+    const scale = Math.min(1, maxDimension / Math.max(width, height));
+    const targetW = Math.max(1, Math.round(width * scale));
+    const targetH = Math.max(1, Math.round(height * scale));
 
     const canvas = document.createElement('canvas');
     canvas.width = targetW;
     canvas.height = targetH;
     const ctx = canvas.getContext('2d');
-    if (!ctx) { bitmap.close?.(); return file; }
-    ctx.drawImage(bitmap, 0, 0, targetW, targetH);
-    bitmap.close?.();
+    if (!ctx) return null;
+    if (flatten) { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, targetW, targetH); }
+    ctx.drawImage(source, 0, 0, targetW, targetH);
 
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', PHOTO_JPEG_QUALITY));
-    if (!blob) return file; // toBlob a échoué : on garde l'original
-
-    const compressed = new File(
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+    if (!blob) return null;
+    return new File(
       [blob],
       (file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg',
       { type: 'image/jpeg' },
     );
-    // Garde-fou : dans le rare cas où la version "compressée" ressort plus
-    // lourde que l'originale, on garde l'originale.
-    return compressed.size < file.size ? compressed : file;
   } catch (e) {
-    return file; // n'importe quel souci : on envoie le fichier original
+    return null;
+  } finally {
+    try { decoded?.release(); } catch (e) { /* ignore */ }
   }
+}
+
+async function compressPhotoFile(file) {
+  if (!file || !(file instanceof File)) return file;
+  if (!looksLikeImage(file)) return file;
+  if (file.size <= PHOTO_SKIP_UNDER_BYTES) return file;
+
+  const compressed = await reencodeImageAsJpeg(file, {
+    maxDimension: PHOTO_MAX_DIMENSION,
+    quality: PHOTO_JPEG_QUALITY,
+    flatten: false,
+  });
+  if (!compressed) return file; // n'importe quel souci : on envoie le fichier original
+  // Garde-fou : dans le rare cas où la version « compressée » ressort plus
+  // lourde que l'originale, on garde l'originale.
+  return compressed.size < file.size ? compressed : file;
+}
+
+// Justificatif : un PDF part TEL QUEL (comportement inchangé). Une photo est
+// toujours ré-encodée en JPEG : ça applique la rotation EXIF (sinon la page
+// PDF produite par le serveur serait couchée), convertit HEIC/WebP quand le
+// navigateur sait les lire, et ramène le poids sous le plafond d'envoi.
+async function prepareDocumentFile(file) {
+  if (!file || !(file instanceof File)) return file;
+  if (isPdfFile(file)) return file;
+  if (!looksLikeImage(file)) return file;
+  const converted = await reencodeImageAsJpeg(file, {
+    maxDimension: DOCUMENT_MAX_DIMENSION,
+    quality: DOCUMENT_JPEG_QUALITY,
+    flatten: true,
+  });
+  return converted || file;
+}
+
+// Contrôle immédiat à la sélection d'un fichier (volontairement indulgent : on
+// ne bloque que ce que le serveur refuserait de toute façon — le vrai contrôle
+// de contenu reste côté serveur).
+let lastFileChoiceAlert = ''; // dernier message affiché par checkChosenFile (pour ne pas laisser une erreur périmée)
+function checkChosenFile(rule) {
+  const input = g(rule.id);
+  const file = input?.files?.[0];
+  if (!file) return;
+  let message = '';
+  if (rule.photo) {
+    if (file.type && !looksLikeImage(file)) {
+      message = `Ce fichier n'est pas une image : ${rule.label} doit être une photo JPEG ou PNG.`;
+    }
+  } else if (isPdfFile(file)) {
+    if (file.size > MAX_UPLOAD_BYTES) message = `Ce PDF est trop volumineux (8 Mo maximum) pour ${rule.label}.`;
+  } else if (file.type && !looksLikeImage(file)) {
+    message = `Format non pris en charge pour ${rule.label} : joignez un PDF ou une photo (JPEG ou PNG).`;
+  }
+  if (message) {
+    input.value = '';
+    lastFileChoiceAlert = message;
+    setAlert(message);
+  } else if (lastFileChoiceAlert && (g('signup-alert')?.textContent || '').trim() === lastFileChoiceAlert) {
+    // Un fichier valide remplace celui qui avait été refusé : on retire l'ancien message.
+    lastFileChoiceAlert = '';
+    setAlert('');
+  }
+}
+
+// Contrôle final, sur les fichiers tels qu'ils vont réellement partir (après
+// compression) : message clair + retour à l'étape concernée, au lieu d'une
+// erreur technique du serveur à la toute dernière étape.
+function findFileProblem(entries) {
+  const okImageTypes = ['image/jpeg', 'image/png'];
+  const iosTip = ' Sur iPhone : Réglages > Appareil photo > Formats > « Le plus compatible ».';
+  for (const { rule, file } of entries) {
+    const Label = capitalize(rule.label);
+    if (file.size > MAX_UPLOAD_BYTES) {
+      return { step: rule.step, message: `${Label} est trop volumineux (8 Mo maximum). Choisissez un fichier plus léger${rule.photo ? '' : ' ou une photo'}.` };
+    }
+    if (rule.photo) {
+      if (file.type && !okImageTypes.includes(file.type)) {
+        return { step: rule.step, message: `${Label} doit être une image JPEG ou PNG : ce format n'est pas pris en charge.${iosTip}` };
+      }
+    } else if (!isPdfFile(file) && file.type && !okImageTypes.includes(file.type)) {
+      return { step: rule.step, message: `${Label} : format non pris en charge (PDF, JPEG ou PNG acceptés).${iosTip}` };
+    }
+  }
+  return null;
+}
+
+// Pièces obligatoires absentes au moment d'envoyer (par ex. brouillon restauré
+// après un rechargement de page : les fichiers ne peuvent pas être conservés).
+// Reprend exactement les conditions de validateStep (étapes 1, 3 et 4).
+function findMissingRequiredFile() {
+  const missing = (rule) => ({
+    step: rule.step,
+    message: `Merci de joindre ${rule.label} : les pièces jointes ne sont pas conservées si la page a été rechargée.`,
+  });
+  if (!g('photoIdentity')?.files?.length) return missing(FILE_RULES.photoIdentity);
+  if (val('passRegionEnabled') === 'true' && !g('passRegionDocument')?.files?.length) {
+    return missing(FILE_RULES.passRegionDocument);
+  }
+  const formula = val('formulaCode');
+  if ((formula === 'pro' || formula === 'cse_thales') && !g('proProofDocument')?.files?.length) {
+    return missing(FILE_RULES.proProofDocument);
+  }
+  const qsPositive = Object.values(collectQs()).some(v => v === 'yes');
+  if ((isMinor(val('birthDate')) || qsPositive)
+      && !g('medicalCertificate')?.files?.length
+      && !checked('certificateCommitment')
+      && !certificateReusable()) {
+    return missing(FILE_RULES.medicalCertificate);
+  }
+  return null;
 }
 
 // ─── Soumission du formulaire ─────────────────────────────────────────────────
 
+// Passage à l'étape suivante (bouton « Continuer » ; sur appareil tactile aussi
+// la touche « Aller / Suivant » du clavier). Logique reprise telle quelle du
+// gestionnaire de clic, pour qu'elle reste identique des deux côtés.
+function goToNextStep() {
+  const err = validateStep(currentStep);
+  if (err) { setAlert(err); return; }
+  saveDraft();
+  showStep(Math.min(currentStep + 1, TOTAL_STEPS - 1));
+  if (currentStep === 5) renderClothingOrder(); // Recalcul quantités tenue
+}
+
+// Message lisible quand le réseau lâche pendant l'envoi (fréquent en 4G, dans un
+// train, en changeant de Wi-Fi) : le navigateur ne fournit sinon qu'un texte
+// technique en anglais (« Failed to fetch », « Load failed »…).
+function isNetworkFailure(err) {
+  return /failed to fetch|load failed|networkerror|network request failed|internet connection appears to be offline|network connection was lost/i
+    .test(String(err?.message || ''));
+}
+
 async function submitForm(event) {
   event.preventDefault();
+
+  // Appareil tactile : la touche « Aller » du clavier virtuel soumet le formulaire
+  // depuis n'importe quelle étape. Avant la dernière, ce n'est pas un envoi du
+  // dossier mais un « Continuer ».
+  if (IS_TOUCH_DEVICE && currentStep < TOTAL_STEPS - 1) { goToNextStep(); return; }
 
   const error = validateStep(7);
   if (error) { setAlert(error); return; }
 
+  // Pièce obligatoire absente (typiquement : page rechargée par le téléphone,
+  // les fichiers ne survivent pas à un rechargement) : on renvoie à la bonne
+  // étape avec un message clair, plutôt qu'une erreur du serveur à la fin.
+  const missingFile = findMissingRequiredFile();
+  if (missingFile) { showStep(missingFile.step); setAlert(missingFile.message); return; }
+
   const btn = g('submit-button');
+  const submitLabel = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = 'Préparation…'; }
   setAlert('');
 
@@ -1581,21 +1799,33 @@ async function submitForm(event) {
     formData.append('payload', JSON.stringify(payload));
 
     // Fichiers
+    const fileEntries = []; // fichiers tels qu'ils vont partir, pour le contrôle final
     const photoFileRaw = g('photoIdentity')?.files?.[0];
     if (photoFileRaw) {
       if (btn) btn.textContent = 'Compression de la photo…';
       const photoFile = await compressPhotoFile(photoFileRaw);
       formData.append('photoIdentity', photoFile);
+      fileEntries.push({ rule: FILE_RULES.photoIdentity, file: photoFile });
     }
 
-    const certFile = g('medicalCertificate')?.files?.[0];
-    if (certFile) formData.append('medicalCertificate', certFile);
+    // Certificat médical, justificatif Pass Région, justificatif tarif réduit :
+    // un PDF part tel quel ; une photo est réduite (cf. prepareDocumentFile).
+    for (const id of ['medicalCertificate', 'passRegionDocument', 'proProofDocument']) {
+      const rawDoc = g(id)?.files?.[0];
+      if (!rawDoc) continue;
+      if (btn && !isPdfFile(rawDoc) && looksLikeImage(rawDoc)) btn.textContent = 'Préparation des documents…';
+      const doc = await prepareDocumentFile(rawDoc);
+      formData.append(id, doc);
+      fileEntries.push({ rule: FILE_RULES[id], file: doc });
+    }
 
-    const passRegionFile = g('passRegionDocument')?.files?.[0];
-    if (passRegionFile) formData.append('passRegionDocument', passRegionFile);
-
-    const proofFile = g('proProofDocument')?.files?.[0];
-    if (proofFile) formData.append('proProofDocument', proofFile);
+    const fileProblem = findFileProblem(fileEntries);
+    if (fileProblem) {
+      if (btn) { btn.disabled = false; btn.textContent = submitLabel; }
+      showStep(fileProblem.step);
+      setAlert(fileProblem.message);
+      return;
+    }
 
     // Honeypot
     formData.append('website', '');
@@ -1655,7 +1885,9 @@ async function submitForm(event) {
     window.location.href = helloAssoUrl;
 
   } catch (err) {
-    setAlert(err.message || 'Une erreur est survenue. Veuillez réessayer.');
+    setAlert(isNetworkFailure(err)
+      ? 'La connexion a été interrompue pendant l\'envoi de votre dossier. Vérifiez votre réseau (idéalement en Wi-Fi), puis réessayez.'
+      : (err.message || 'Une erreur est survenue. Veuillez réessayer.'));
     if (btn) { btn.disabled = false; btn.textContent = 'Envoyer l\'inscription'; }
   }
 }
@@ -2070,6 +2302,45 @@ async function loadTarifs() {
   } catch (e) { /* si l'endpoint n'est pas encore déployé, on garde CONFIG tel quel */ }
 }
 
+// Aides à la saisie sur appareil tactile (sans effet sur ordinateur) :
+//  - touche « entrée » du clavier virtuel libellée « Suivant » ;
+//  - pas de majuscule automatique / correcteur sur les noms et lieux (le correcteur
+//    d'iOS transforme volontiers un prénom) ;
+//  - rappel des formats acceptés sous les champs de pièces jointes.
+function enhanceMobileForm() {
+  if (!IS_TOUCH_DEVICE) return;
+
+  document.querySelectorAll('.step-panel input').forEach((el) => {
+    if (['file', 'checkbox', 'radio', 'date', 'number', 'hidden'].includes(el.type)) return;
+    if (el.closest('.step-panel[data-step="7"]')) return;
+    el.setAttribute('enterkeyhint', 'next');
+  });
+
+  ['lastName', 'firstName', 'birthPlace', 'address1', 'city',
+   'emergencyLastName', 'emergencyFirstName', 'legalLastName', 'legalFirstName', 'legalCity'].forEach((id) => {
+    const el = g(id);
+    if (!el) return;
+    el.setAttribute('autocapitalize', 'words');
+    el.setAttribute('autocorrect', 'off');
+    el.setAttribute('spellcheck', 'false');
+  });
+  const emailField = g('email');
+  if (emailField) {
+    emailField.setAttribute('autocapitalize', 'off');
+    emailField.setAttribute('autocorrect', 'off');
+    emailField.setAttribute('spellcheck', 'false');
+  }
+
+  ['medicalCertificate', 'passRegionDocument', 'proProofDocument'].forEach((id) => {
+    const label = g(id)?.closest('label.field');
+    if (!label || label.querySelector('.file-hint')) return;
+    const hint = document.createElement('small');
+    hint.className = 'file-hint';
+    hint.textContent = 'PDF ou photo (JPEG, PNG) : une photo prise avec le téléphone convient, elle est réduite automatiquement.';
+    label.appendChild(hint);
+  });
+}
+
 async function init() {
   // 1. Charger la config
   await loadConfig();
@@ -2134,6 +2405,11 @@ async function init() {
         alert.textContent = draft.familyMember
           ? 'Adresse, téléphones, email et contact d\'urgence repris de l\'inscription précédente : vérifiez-les, puis complétez l\'identité de ce nouveau membre.'
           : 'Un brouillon a été restauré. Vérifiez vos informations avant de continuer.';
+        // Les fichiers choisis ne peuvent pas être restaurés : un téléphone recharge
+        // volontiers la page (retour de l'appareil photo, changement d'application).
+        if (IS_TOUCH_DEVICE && !draft.familyMember && draft.step >= 1) {
+          alert.textContent += ' Vos pièces jointes (photo, certificat…) ne sont pas conservées : pensez à les ajouter à nouveau.';
+        }
       }
     }
   }
@@ -2150,13 +2426,7 @@ async function init() {
     const prevBtn = e.target.closest('[data-prev]');
     const stepBtn = e.target.closest('[data-step-nav]');
 
-    if (nextBtn) {
-      const err = validateStep(currentStep);
-      if (err) { setAlert(err); return; }
-      saveDraft();
-      showStep(Math.min(currentStep + 1, TOTAL_STEPS - 1));
-      if (currentStep === 5) renderClothingOrder(); // Recalcul quantités tenue
-    }
+    if (nextBtn) goToNextStep();
 
     if (prevBtn) {
       showStep(Math.max(currentStep - 1, 0));
@@ -2194,6 +2464,27 @@ async function init() {
         location.reload();
       }
     });
+  }
+
+  // 9 bis. Contrôle immédiat du fichier choisi (format / poids), au lieu d'attendre
+  // l'envoi final. Indulgent : ne bloque que ce que le serveur refuserait de toute façon.
+  for (const rule of Object.values(FILE_RULES)) {
+    const fileInput = g(rule.id);
+    if (fileInput) fileInput.addEventListener('change', () => checkChosenFile(rule));
+  }
+
+  // 9 ter. Appareils tactiles uniquement : aides à la saisie + brouillon enregistré
+  // au fil de la saisie (un téléphone peut décharger la page quand on bascule vers
+  // l'appareil photo ou une autre application ; le brouillon n'était enregistré
+  // qu'au clic sur « Continuer »).
+  enhanceMobileForm();
+  if (IS_TOUCH_DEVICE) {
+    let autosaveTimer = null;
+    const scheduleAutosave = () => { clearTimeout(autosaveTimer); autosaveTimer = setTimeout(autosaveDraftIfNeeded, 800); };
+    document.addEventListener('input', scheduleAutosave);
+    document.addEventListener('change', scheduleAutosave);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') autosaveDraftIfNeeded(); });
+    window.addEventListener('pagehide', autosaveDraftIfNeeded);
   }
 
   // 10. Mise à jour initiale

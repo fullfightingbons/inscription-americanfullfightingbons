@@ -25,6 +25,7 @@ import {
 import { finalizeFreeRegistration } from "../../_lib/free-registration.js";
 import { CSE_ACCESS_FORMULA, readCseAccessHeader, verifyCseAccessCode } from "../../_lib/cse-access.js";
 import { findReusableCertificate, resolveCertificateSubmission } from "../../_lib/medical-certificate.js";
+import { imageToPdfBytes, sniffFileKind } from "../../_lib/image-to-pdf.js";
 
 const MAX_FILE_SIZE = 8 * 1024 * 1024; // 8 Mo
 const FETCH_TIMEOUT_MS = 12_000; // 12 s pour les appels externes
@@ -389,28 +390,80 @@ export function validatePayload(payload) {
 
 // ─── Upload R2 ────────────────────────────────────────────────────────────────
 
-async function uploadRequiredFile(env, registrationId, file, targetName, preferImage = false) {
-  if (!(file instanceof File) || !file.size) throw new Error(`Le document ${targetName} est obligatoire`);
-  if (file.size > MAX_FILE_SIZE) throw new Error(`Le document ${targetName} dépasse ${Math.round(MAX_FILE_SIZE / 1024 / 1024)} Mo`);
+// Libellés lisibles des pièces (les messages d'erreur sont affichés tels quels à
+// l'adhérent : « certificat-medical » est un nom technique, pas un libellé).
+const DOCUMENT_LABELS = {
+  "photo-identite": "photo d'identité",
+  "certificat-medical": "certificat médical",
+  "pass-region": "justificatif Pass Région",
+  "justificatif-tarif": "justificatif de tarif réduit",
+};
+
+function replaceFileExtension(name, extension) {
+  const base = String(name || "document").replace(/\.[^./\\]+$/, "");
+  return `${base || "document"}${extension}`;
+}
+
+export async function uploadRequiredFile(env, registrationId, file, targetName, preferImage = false) {
+  const label = DOCUMENT_LABELS[targetName] || targetName;
+  if (!(file instanceof File) || !file.size) throw new Error(`Le document ${label} est obligatoire`);
+  if (file.size > MAX_FILE_SIZE) throw new Error(`Le document ${label} dépasse ${Math.round(MAX_FILE_SIZE / 1024 / 1024)} Mo`);
+
+  // Valeurs par défaut = comportement historique (fichier stocké tel quel, avec
+  // son type et son nom). Elles ne changent que dans les deux cas ci-dessous,
+  // qui étaient auparavant des refus.
+  let storedBytes = null;          // octets à stocker à la place du fichier (conversion)
+  let contentType = file.type;
+  let extension = fileExtension(file.name);
+  let storedName = file.name;
 
   if (preferImage) {
-    if (!["image/jpeg", "image/png"].includes(file.type)) throw new Error(`Le document ${targetName} doit être une image JPEG ou PNG`);
-  } else {
-    if (file.type !== "application/pdf") throw new Error(`Le document ${targetName} doit être un fichier PDF`);
+    if (!["image/jpeg", "image/png"].includes(file.type)) {
+      // Type déclaré vide ou générique (fréquent depuis un téléphone) : on se fie
+      // au contenu réel du fichier avant de refuser.
+      const kind = sniffFileKind(new Uint8Array(await file.slice(0, 1024).arrayBuffer()));
+      if (kind !== "jpeg" && kind !== "png") throw new Error(`Le document ${label} doit être une image JPEG ou PNG`);
+      contentType = kind === "png" ? "image/png" : "image/jpeg";
+      extension = kind === "png" ? ".png" : ".jpg";
+    }
+  } else if (file.type !== "application/pdf") {
+    // Pièce justificative qui n'est pas déclarée « PDF » : le plus souvent une
+    // PHOTO prise avec le téléphone. Jusqu'ici refusée ; elle est maintenant
+    // convertie en PDF, pour que tout le reste de la chaîne (fusion dans le
+    // dossier PDF, fiche adhérent) continue de ne manipuler que des PDF.
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const kind = sniffFileKind(bytes);
+    if (kind === "pdf") {
+      storedBytes = bytes;
+      contentType = "application/pdf";
+      extension = ".pdf";
+    } else if (kind === "jpeg" || kind === "png") {
+      try {
+        storedBytes = await imageToPdfBytes(bytes, kind);
+      } catch (error) {
+        console.error(`[inscription] conversion image→PDF impossible (${targetName}):`, error?.message ?? String(error));
+        throw new Error(`Le document ${label} n'a pas pu être lu. Joignez-le en PDF, ou en photo JPEG/PNG.`);
+      }
+      contentType = "application/pdf";
+      extension = ".pdf";
+      storedName = replaceFileExtension(file.name, ".pdf");
+    } else {
+      throw new Error(`Le document ${label} doit être un PDF ou une photo (JPEG ou PNG)`);
+    }
   }
 
   const bucket = preferImage ? (env.R2_STORAGE || env.R2_PDF) : (env.R2_PDF || env.R2_STORAGE);
   if (!bucket) throw new Error("Le stockage des pièces justificatives n'est pas configuré");
 
-  const key = `public-inscriptions/${registrationId}/${targetName}${fileExtension(file.name) || (preferImage ? ".jpg" : ".pdf")}`;
-  await bucket.put(key, await file.arrayBuffer(), {
-    httpMetadata:   { contentType: file.type || (preferImage ? "image/jpeg" : "application/pdf") },
+  const key = `public-inscriptions/${registrationId}/${targetName}${extension || (preferImage ? ".jpg" : ".pdf")}`;
+  await bucket.put(key, storedBytes || await file.arrayBuffer(), {
+    httpMetadata:   { contentType: contentType || (preferImage ? "image/jpeg" : "application/pdf") },
     customMetadata: { originalName: safeFileName(file.name || targetName) },
   });
 
   return {
     bucket: preferImage ? (env.R2_STORAGE ? "storage" : "fullfighting-pdf") : (env.R2_PDF ? "fullfighting-pdf" : "storage"),
-    key, name: file.name || targetName, contentType: file.type || "", size: file.size || 0,
+    key, name: storedName || targetName, contentType: contentType || "", size: storedBytes ? storedBytes.byteLength : (file.size || 0),
   };
 }
 

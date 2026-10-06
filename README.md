@@ -143,6 +143,21 @@ Quand les inscriptions sont fermées (`club_info.public_inscription_enabled` = `
 - Pas de migration : le code est une simple ligne de `club_info`.
 - Recommandation : ajouter une règle de limitation de débit Cloudflare (WAF → Rate limiting rules) sur `/api/public/cse-access`. Côté Worker, chaque refus est ralenti (~0,8 s) et journalisé (`console.warn`), mais rien n'est écrit en base.
 
+## Pièces justificatives envoyées en photo (mobile)
+
+Le certificat médical, le justificatif Pass Région et le justificatif de tarif réduit
+sont des PDF pour toute la suite de la chaîne (fusion dans le dossier PDF, fiche adhérent).
+Sur téléphone, la personne photographie souvent son document : une photo JPEG/PNG est donc
+**convertie en PDF d'une page à l'enregistrement** (`src/routes/_lib/image-to-pdf.js`, rotation EXIF
+comprise). Un PDF est stocké tel quel, comme avant.
+
+Côté navigateur (`public/assets/inscription.js`) : les photos sont réduites avant l'envoi
+(≤ 2 200 px, JPEG), le format et le poids (8 Mo) sont contrôlés avec un message clair, et
+une erreur réseau est expliquée en français. Sur **appareil tactile uniquement**
+(`pointer: coarse`), le brouillon est aussi enregistré pendant la saisie, la touche « Aller »
+du clavier fait « Continuer », et les formats acceptés sont rappelés sous les champs. Le parcours
+sur ordinateur n'est pas modifié.
+
 ## URLs publiques
 
 - `/` : formulaire d'inscription
