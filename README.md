@@ -131,6 +131,48 @@ Le lien de paiement HelloAsso n'est valable que **15 minutes**. Un adhérent peu
 - Côté serveur, `resume.js` : (1) refuse un dossier expiré (`abandonnee`) ; (2) **vérifie d'abord qu'aucune tentative précédente n'a été payée** (via `status.js`, qui finalise alors le dossier) et refuse d'ouvrir un second paiement si HelloAsso est injoignable ; (3) crée un nouveau checkout à partir du dossier stocké (l'adhérent peut changer le nombre d'échéances) ; (4) garde l'ancien identifiant dans `dossier_json.payment.previousCheckoutIntentIds`, que `status.js` relit pour retrouver un paiement fait sur un ancien lien. Plafond : 8 reprises par dossier.
 - Ce traitement passe **avant** l'état « inscriptions fermées » : quelqu'un qui a déjà envoyé son dossier peut toujours terminer son paiement.
 
+## Journal d'incidents : pourquoi un adhérent est bloqué
+
+Chaque blocage laisse une trace précise, au lieu d'un message générique et d'un `console.error` perdu dans les logs. Tout passe par `src/routes/_lib/diagnostics.js` (`reportFailure`), qui ne lève jamais d'exception.
+
+**Ce qui est consigné** (table `audit_logs`, qui existe déjà) :
+
+- `public.erreur` : panne technique (HelloAsso, D1, timeout, bug…) ;
+- `public.refus` : refus métier attendu (champ obligatoire, renouvellement introuvable, dossier expiré, plafond de reprises…).
+
+Le champ `details` (JSON) contient : `incidentId` (référence `INC-XXXXXX`), `step` + `stepLabel` (l'étape exacte, cf. `STEP_LABELS`), `kind` (`provider_rejected_data`, `provider_auth`, `provider_rate_limit`, `provider_down`, `timeout`, `network`, `database`, `bug`, `config`, `business`…), `httpStatus` HelloAsso, `endpoint` appelé, `providerMessage` + `fieldErrors` (champs refusés), `paid` (le paiement était-il déjà encaissé ?) et `extra` (ex. identifiant du checkout orphelin). Une ligne JSON `affbc.incident` est aussi écrite dans les logs du Worker.
+
+**Étapes couvertes** : inscription (lecture, validation, éligibilité, renouvellement, tarif, certificat, stock, enregistrement du brouillon, envoi de chaque pièce, création du checkout, finalisation), reprise (recherche, état, vérification d'un paiement précédent, création du checkout, mise à jour), `status` (lecture HelloAsso, verrou, finalisation après paiement), webhook (authentification, lecture, synchronisation), purge cron, erreur non gérée du Worker, et contrôle de santé quotidien.
+
+**Ce que voit l'adhérent** : un message adapté à la cause (HelloAsso refuse une donnée → il voit laquelle ; HelloAsso indisponible ; problème de configuration côté club ; paiement encaissé mais dossier non finalisé → « ne payez pas une seconde fois »), terminé par `(Référence : INC-XXXXXX)`. Il peut citer cette référence au club. L'écran « Reprenez votre paiement » affiche aussi l'erreur renvoyée par la vérification du paiement.
+
+**Alerte e-mail au club** (Brevo, `SIGNUP_ALERT_TO`) pour chaque panne technique, **dédupliquée sur 30 minutes** par couple (étape, type) : une panne HelloAsso ne produit pas un e-mail par adhérent. Pour un paiement encaissé mais non finalisé, une alerte par dossier. Les refus métier n'envoient rien.
+
+**Consulter le journal** :
+
+```
+GET /api/admin/inscription/incidents?hours=72&limit=100&type=erreur|refus&id=INC-XXXXXX
+Authorization: Bearer $INSCRIPTION_ADMIN_STATUS_TOKEN
+```
+
+La réponse contient un résumé par (type, étape, cause) et les lignes détaillées. Même jeton que `/api/admin/inscription/status`. Équivalent SQL :
+
+```sql
+SELECT created_at, action, entity_id,
+       json_extract(details, '$.incidentId')       AS ref,
+       json_extract(details, '$.step')             AS etape,
+       json_extract(details, '$.kind')             AS cause,
+       json_extract(details, '$.httpStatus')       AS http,
+       json_extract(details, '$.providerMessage')  AS reponse_helloasso
+FROM audit_logs
+WHERE action IN ('public.erreur', 'public.refus')
+ORDER BY created_at DESC LIMIT 50;
+```
+
+**Contrôle de santé** (`cron/health-check.js`, lancé par le même cron que la purge) : vérifie les secrets (noms manquants uniquement), la base D1 et l'acceptation des identifiants HelloAsso (une demande de jeton par exécution). Un échec est consigné (`health.*`) et alerté **avant** qu'un adhérent ne soit bloqué. Le cron est quotidien ; pour une surveillance plus serrée, augmenter la fréquence de `triggers.crons` dans `wrangler.json` (la purge est idempotente).
+
+**Données personnelles** : aucune donnée du formulaire n'est copiée dans le journal : seulement la référence du dossier, l'étape, l'adresse IP (comme les autres entrées d'`audit_logs`) et la réponse technique de HelloAsso, tronquée à 600 caractères. Cette réponse peut citer la valeur qu'HelloAsso a refusée (par exemple une adresse e-mail invalide) : à garder en tête pour la durée de conservation de `audit_logs`.
+
 ## Accès CSE Thalès hors période d'ouverture
 
 Quand les inscriptions sont fermées (`club_info.public_inscription_enabled` = `0`), les membres du CSE Thalès peuvent tout de même s'inscrire toute l'année :
@@ -172,3 +214,4 @@ sur ordinateur n'est pas modifié.
 ## URL admin optionnelle
 
 - `GET /api/admin/inscription/status` : agrégats non nominatifs des dossiers publics, protégé par `Authorization: Bearer $INSCRIPTION_ADMIN_STATUS_TOKEN`. La route renvoie `503` tant que le secret n'est pas configuré.
+- `GET /api/admin/inscription/incidents` : journal d'incidents (voir « Journal d'incidents »), même jeton.

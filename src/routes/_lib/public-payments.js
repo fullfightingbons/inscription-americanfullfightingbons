@@ -1,4 +1,5 @@
 import { badRequest } from "./data.js";
+import { HelloAssoApiError, extractFieldErrors } from "./diagnostics.js";
 
 const FETCH_TIMEOUT_MS = 12_000; // 12 s pour les appels externes (aligné sur inscription.js)
 
@@ -52,7 +53,7 @@ function getHelloAssoBaseUrl(env) {
 
 async function getHelloAssoAccessToken(env) {
   if (!env.HELLOASSO_CLIENT_ID || !env.HELLOASSO_CLIENT_SECRET) {
-    throw new Error("HelloAsso n'est pas configuré");
+    throw new HelloAssoApiError("HelloAsso n'est pas configuré", { kind: "config", endpoint: "POST /oauth2/token" });
   }
   const response = await fetch(`${getHelloAssoBaseUrl(env).replace(/\/v5$/, "")}/oauth2/token`, {
     method: "POST",
@@ -69,14 +70,20 @@ async function getHelloAssoAccessToken(env) {
   });
   const result = await response.json().catch(() => null);
   if (!response.ok || !result?.access_token) {
-    throw new Error(result?.error_description || result?.message || "Authentification HelloAsso impossible");
+    const providerMessage = String(result?.error_description || result?.message || "").trim();
+    throw new HelloAssoApiError(providerMessage || "Authentification HelloAsso impossible", {
+      // 200 sans access_token : réponse inattendue, on le traite comme une panne côté HelloAsso.
+      httpStatus: response.ok ? 502 : response.status,
+      endpoint: "POST /oauth2/token",
+      providerMessage,
+    });
   }
   return result.access_token;
 }
 
 async function helloAssoRequest(env, path, method = "GET", body = null) {
   if (!env.HELLOASSO_ORGANIZATION_SLUG) {
-    throw new Error("Le slug d'organisation HelloAsso est manquant");
+    throw new HelloAssoApiError("Le slug d'organisation HelloAsso est manquant", { kind: "config", endpoint: `${method} ${path}` });
   }
   const token = await getHelloAssoAccessToken(env);
   const response = await fetch(`${getHelloAssoBaseUrl(env)}${path}`, {
@@ -100,11 +107,18 @@ async function helloAssoRequest(env, path, method = "GET", body = null) {
     const errorMessages = Array.isArray(result?.errors)
       ? result.errors.map((entry) => entry?.message).filter(Boolean).join(" | ")
       : "";
-    throw new Error(
+    const fieldErrors = extractFieldErrors(result);
+    throw new HelloAssoApiError(
       result?.message ||
       result?.error ||
       errorMessages ||
       `Erreur HelloAsso (${response.status}) : ${text || "réponse vide"}`,
+      {
+        httpStatus: response.status,
+        endpoint: `${method} ${path}`,
+        providerMessage: String(result?.message || result?.error || errorMessages || text || "").slice(0, 600),
+        fieldErrors,
+      },
     );
   }
   return result;
@@ -116,6 +130,7 @@ function badPaymentRequest(error) {
 
 export {
   badPaymentRequest,
+  getHelloAssoAccessToken,
   getRegistration,
   helloAssoRequest,
   parseDossierJson,

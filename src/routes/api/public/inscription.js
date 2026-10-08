@@ -13,6 +13,7 @@
 
 import { badRequest, json } from "../../_lib/data.js";
 import { getClientIp, writeAuditLog } from "../../_lib/audit.js";
+import { HelloAssoApiError, helloAssoErrorFromResponse, reportFailure, reportRefusal } from "../../_lib/diagnostics.js";
 import { isMinor, calculateTotals, toBool, normalizeInstallmentCount, findActiveExercise, normalizeNameForComparison, normalizeDateForComparison, normalizeEmail } from "../../_lib/helpers.js";
 import {
   assertAdditionalOrderItemsStock,
@@ -484,11 +485,14 @@ async function getHelloAssoToken(env) {
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`HelloAsso auth échouée (${response.status}) : ${text}`);
+    throw await helloAssoErrorFromResponse(response, { what: "auth", endpoint: "POST /oauth2/token" });
   }
   const data = await response.json();
-  if (!data.access_token) throw new Error("HelloAsso : token absent de la réponse d'authentification");
+  if (!data.access_token) {
+    throw new HelloAssoApiError("HelloAsso : token absent de la réponse d'authentification", {
+      httpStatus: 502, endpoint: "POST /oauth2/token",
+    });
+  }
   return data.access_token;
 }
 
@@ -503,11 +507,11 @@ export function getPublicOrigin(env) {
 
 export async function createHelloAssoCheckout(env, payload, totals, registrationId) {
   if (!env.HELLOASSO_CLIENT_ID || !env.HELLOASSO_CLIENT_SECRET || !env.HELLOASSO_ORGANIZATION_SLUG) {
-    throw new Error("HelloAsso n'est pas configuré (variables d'environnement manquantes).");
+    throw new HelloAssoApiError("HelloAsso n'est pas configuré (variables d'environnement manquantes).", { kind: "config" });
   }
 
   const amountCents = Math.round(totals.total * 100);
-  if (amountCents <= 0) throw new Error("Le montant du dossier est nul — impossible de créer un paiement HelloAsso.");
+  if (amountCents <= 0) throw new HelloAssoApiError("Le montant du dossier est nul — impossible de créer un paiement HelloAsso.", { kind: "config" });
 
   const installmentPlan = buildInstallmentPlan(amountCents, payload.payment?.installmentCount);
   payload.payment = { ...(payload.payment || {}), installmentCount: installmentPlan.installmentCount, schedule: installmentPlan.schedule };
@@ -592,8 +596,10 @@ export async function createHelloAssoCheckout(env, payload, totals, registration
     },
   );
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`HelloAsso checkout échoué (${response.status}) : ${text}`);
+    throw await helloAssoErrorFromResponse(response, {
+      what: "checkout",
+      endpoint: `POST /organizations/${env.HELLOASSO_ORGANIZATION_SLUG}/checkout-intents`,
+    });
   }
   const data = await response.json();
   return { url: data.redirectUrl || data.checkoutUrl || null, checkoutIntentId: data.id || null };
@@ -828,7 +834,9 @@ export async function checkBlacklist(db, payload) {
 
 // ─── Handler principal ────────────────────────────────────────────────────────
 
-export async function onRequestPost(context) {
+// `trace` suit l'étape en cours : si quelque chose échoue (exception OU refus renvoyé
+// directement), le journal d'incidents sait EXACTEMENT où ça a bloqué.
+async function handleInscriptionPost(context, trace) {
   if (!context.env.DB) return badRequest("D1 binding is missing", 500);
 
   // ── Verrou inscriptions ouvertes/fermées ──────────────────────────────────
@@ -859,6 +867,7 @@ export async function onRequestPost(context) {
   const uploadedFileRefs = []; // { bucket: R2Bucket, key }
 
   try {
+    trace.step = "inscription.parse";
     const formData = await context.request.formData();
 
     // Honeypot anti-spam
@@ -877,6 +886,7 @@ export async function onRequestPost(context) {
       );
     }
 
+    trace.step = "inscription.validation";
     const validation = validatePayload(payload);
 
     // ── Blocage blacklist (radiation prononcée par le bureau) ────────────────
@@ -889,7 +899,9 @@ export async function onRequestPost(context) {
     // bureau à assumer humainement, pas quelque chose à notifier tel quel
     // depuis un formulaire public (et ça évite de confirmer à un tiers
     // qu'une identité précise est blacklistée).
+    trace.step = "inscription.blacklist";
     if (await checkBlacklist(context.env.DB, payload)) {
+      trace.reported = true; // déjà tracé ci-dessous (action dédiée)
       await writeAuditLog(context.env.DB, {
         action:     "public.inscription_blocked_blacklist",
         entityType: "adherents",
@@ -903,6 +915,7 @@ export async function onRequestPost(context) {
       );
     }
 
+    trace.step = "inscription.renewal_check";
     // ── Vérification renouvellement ──────────────────────────────────────────
     let matchingAdherent = null;
     if (payload.practice.typeInscription === "renouvellement") {
@@ -925,6 +938,7 @@ export async function onRequestPost(context) {
       }
     }
 
+    trace.step = "inscription.pricing";
     // ── Calcul des totaux depuis D1 (jamais depuis payload.pricing) ──────────
     const serverPricing = await loadPricingFromDb(context.env.DB, context.env);
     const extraProductCatalog = await loadOrderProductsFromDb(context.env.DB, context.env);
@@ -937,6 +951,7 @@ export async function onRequestPost(context) {
     );
     totals.certificateRequired = validation.certificateRequired;
 
+    trace.step = "inscription.certificate";
     // ── Certificat médical : pièce jointe OU engagement à la fournir ─────────
     // Obligatoire pour un mineur ou si le QS-Sport comporte un « oui ». Si la
     // pièce n'est pas disponible le jour de l'inscription, l'adhérent peut
@@ -996,6 +1011,7 @@ export async function onRequestPost(context) {
       pantalonQty: totals.pantalonQty,
     };
 
+    trace.step = "inscription.stock";
     try {
       const clothingStock = await fetchBoutiqueClothingStock(context.env);
       assertClothingOrderStock(clothingStock, effectiveClothingOrder);
@@ -1011,7 +1027,9 @@ export async function onRequestPost(context) {
     // toujours une trace en base (statut "brouillon" ou "echec_creation")
     // plutôt qu'un paiement HelloAsso ou des fichiers R2 sans aucune ligne
     // pour les rattacher.
+    trace.step = "inscription.draft_insert";
     registrationId = crypto.randomUUID();
+    trace.registrationId = registrationId;
     const exercise = await findActiveExercise(context.env.DB);
     const draftNow = new Date().toISOString();
 
@@ -1050,21 +1068,26 @@ export async function onRequestPost(context) {
     ).bind(...draftColumns.map((c) => draftRow[c])).run();
     draftInserted = true;
 
+    trace.step = "inscription.upload";
     // ── Upload des pièces justificatives ─────────────────────────────────────
     const uploadedDocuments = {};
 
+    trace.extra.document = "photo-identite";
     uploadedDocuments.photoIdentity = await uploadRequiredFile(context.env, registrationId, formData.get("photoIdentity"), "photo-identite", true);
     uploadedFileRefs.push(uploadedDocuments.photoIdentity);
 
     if (validation.certificateRequired && !certificateSubmission.deferred && !certificateSubmission.reused) {
+      trace.extra.document = "certificat-medical";
       uploadedDocuments.medicalCertificate = await uploadRequiredFile(context.env, registrationId, formData.get("medicalCertificate"), "certificat-medical", false);
       uploadedFileRefs.push(uploadedDocuments.medicalCertificate);
     }
     if (toBool(payload.practice?.passRegionEnabled)) {
+      trace.extra.document = "pass-region";
       uploadedDocuments.passRegionDocument = await uploadRequiredFile(context.env, registrationId, formData.get("passRegionDocument"), "pass-region", false);
       uploadedFileRefs.push(uploadedDocuments.passRegionDocument);
     }
     if (payload.practice?.formulaCode === "pro" || payload.practice?.formulaCode === "cse_thales") {
+      trace.extra.document = "justificatif-tarif";
       uploadedDocuments.proofDocument = await uploadRequiredFile(context.env, registrationId, formData.get("proProofDocument"), "justificatif-tarif", false);
       uploadedFileRefs.push(uploadedDocuments.proofDocument);
     }
@@ -1082,6 +1105,8 @@ export async function onRequestPost(context) {
         `UPDATE inscriptions_publiques SET documents_json = ?, updated_at = ? WHERE id = ?`,
       ).bind(JSON.stringify(uploadedDocuments), new Date().toISOString(), registrationId).run();
 
+      trace.step = "inscription.free_registration";
+      delete trace.extra.document;
       const { adherentId, emailStatus } = await finalizeFreeRegistration(
         context.env,
         context.env.DB,
@@ -1102,10 +1127,13 @@ export async function onRequestPost(context) {
     }
 
     // ── Création de la session de paiement HelloAsso ─────────────────────────
+    trace.step = "inscription.helloasso_checkout";
+    delete trace.extra.document;
     const checkout = await createHelloAssoCheckout(context.env, payload, totals, registrationId);
     const helloAssoUrl             = checkout.url;
     const helloAssoCheckoutIntentId = checkout.checkoutIntentId;
 
+    trace.step = "inscription.finalize";
     // ── Finalisation de l'inscription ────────────────────────────────────────
     const now = new Date().toISOString();
     await context.env.DB.prepare(
@@ -1173,12 +1201,54 @@ export async function onRequestPost(context) {
       ).bind(new Date().toISOString(), registrationId).run().catch(() => {});
     }
 
-    // Erreurs métier (validation, fichiers) → message lisible ; erreurs inattendues → message générique
-    const isBusinessError = error.message && error.message.length < 200;
-    console.error("[inscription] Erreur:", error?.message ?? String(error));
+    // Journal d'incidents : étape exacte + vraie erreur (HTTP, corps HelloAsso, champs refusés…).
+    const report = await reportFailure(context, {
+      step: trace.step,
+      flow: "inscription",
+      registrationId,
+      error,
+      extra: { ...trace.extra, draftInserted, filesUploaded: uploadedFileRefs.length },
+    });
+    trace.reported = true;
+
+    // Panne technique → message précis + référence d'incident (jamais le texte brut de l'erreur).
+    if (report.technical) return badRequest(report.message, report.status);
+
+    // Refus métier (validation, fichiers) → message lisible tel quel.
+    const isBusinessError = error?.message && error.message.length < 200;
     return badRequest(
-      isBusinessError ? error.message : "Une erreur est survenue. Veuillez réessayer ou contacter le club.",
+      isBusinessError
+        ? error.message
+        : `Une erreur est survenue. Veuillez réessayer ou contacter le club. (Référence : ${report.incidentId})`,
       isBusinessError ? 400 : 500,
     );
   }
+}
+
+// Enveloppe publique : consigne aussi les refus renvoyés SANS exception
+// (renouvellement introuvable, tarif Bureau refusé, stock insuffisant…).
+export async function onRequestPost(context) {
+  const trace = { step: "inscription.parse", registrationId: null, reported: false, extra: {} };
+  let response;
+  try {
+    response = await handleInscriptionPost(context, trace);
+  } catch (error) {
+    // Exception survenue avant le try principal (lecture des réglages d'ouverture, code CSE…).
+    const report = await reportFailure(context, { step: trace.step, flow: "inscription", registrationId: trace.registrationId, error, extra: trace.extra });
+    return badRequest(report.message, report.status);
+  }
+
+  // 423 = inscriptions fermées : état normal, pas un blocage à tracer.
+  if (!trace.reported && response.status >= 400 && response.status !== 423) {
+    let message = "";
+    try { message = (await response.clone().json())?.error || ""; } catch { /* corps non JSON */ }
+    await reportRefusal(context, {
+      step: trace.step,
+      flow: "inscription",
+      registrationId: trace.registrationId,
+      error: new Error(message || `HTTP ${response.status}`),
+      extra: { ...trace.extra, responseStatus: response.status },
+    });
+  }
+  return response;
 }

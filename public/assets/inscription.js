@@ -1927,10 +1927,16 @@ function startNewRegistration() {
   window.location.reload();
 }
 
+// Dernier message d'incident renvoyé par le serveur (« … (Référence : INC-XXXXXX) »). Il était
+// jusqu'ici ignoré : un adhérent dont le paiement était encaissé mais le dossier non finalisé ne
+// voyait rien. Il est affiché dans l'écran « Reprenez votre paiement » (cf. showResumePanel).
+let lastStatusError = '';
+
 async function fetchPaymentStatus(registrationId) {
   try {
     const res = await fetch(`${STATUS_URL}?registrationId=${encodeURIComponent(registrationId)}`, { cache: 'no-store' });
     const data = await res.json().catch(() => null);
+    lastStatusError = (!res.ok && data?.error && /Référence : INC-/.test(String(data.error))) ? String(data.error) : '';
     return data?.data || null;
   } catch (e) { return null; }
 }
@@ -2215,6 +2221,12 @@ function showResumePanel(panel, registrationId, reason, last = null) {
   `;
   panel.querySelector('#resume-pay-button')?.addEventListener('click', () => resumePayment(panel, registrationId));
   panel.querySelector('#new-registration-button')?.addEventListener('click', startNewRegistration);
+
+  // Panne détectée à la vérification du paiement : on l'affiche (avec sa référence) plutôt que de la taire.
+  if (lastStatusError) {
+    const statusAlert = panel.querySelector('#resume-alert');
+    if (statusAlert) { statusAlert.textContent = lastStatusError; statusAlert.hidden = false; }
+  }
 }
 
 // Crée un nouveau lien de paiement pour un dossier déjà enregistré, puis y redirige.

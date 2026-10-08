@@ -14,8 +14,8 @@
  */
 
 import { badRequest, json } from "../../../../_lib/data.js";
+import { reportFailure, reportRefusal } from "../../../../_lib/diagnostics.js";
 import {
-  badPaymentRequest,
   getRegistration,
   helloAssoRequest,
   parseDossierJson,
@@ -923,6 +923,8 @@ export async function onRequestGet(context) {
   }
 
   let registrationId = null;
+  // `trace` : étape en cours + « paiement HelloAsso déjà confirmé ? » (sert au journal d'incidents).
+  const trace = { step: "status.fetch_intent", paid: false };
   try {
     const url = new URL(context.request.url);
     registrationId = String(url.searchParams.get("registrationId") || "").trim();
@@ -943,6 +945,13 @@ export async function onRequestGet(context) {
     );
 
     if (!checkoutIntentId) {
+      await reportRefusal(context, {
+        step: "status.fetch_intent",
+        flow: "status",
+        registrationId,
+        error: new Error("Checkout HelloAsso introuvable pour cette inscription"),
+        extra: { statut: registration.statut },
+      });
       return badRequest("Checkout HelloAsso introuvable pour cette inscription");
     }
 
@@ -988,6 +997,7 @@ export async function onRequestGet(context) {
     }
 
     const paid = paymentSnapshot.hasInitialPayment;
+    trace.paid = Boolean(paid);
     const paidAmount = Number(paymentSnapshot.paidAmountCents || 0) / 100;
     const paidAt =
     order?.date ||
@@ -1023,6 +1033,7 @@ export async function onRequestGet(context) {
     // On pose le verrou ATOMIQUEMENT le plus tôt possible (avant tout effet de
     // bord) via un UPDATE conditionnel : seule la requête qui réussit à faire
     // passer le statut de son état courant à "traitement_paiement" continue.
+    trace.step = "status.lock";
     if (!registration.adherent_id) {
       const lockResult = await context.env.DB.prepare(
         `UPDATE inscriptions_publiques
@@ -1066,6 +1077,7 @@ export async function onRequestGet(context) {
       }
     }
 
+    trace.step = "status.finalize";
     if (registration.adherent_id) {
       const stockSync = await syncClothingStockIfNeeded(context.env, registrationId, dossier);
       const exercise =
@@ -1323,6 +1335,15 @@ export async function onRequestGet(context) {
         WHERE id = ? AND adherent_id IS NULL AND statut = 'traitement_paiement'`,
       ).bind(new Date().toISOString(), registrationId).run().catch(() => {});
     }
-    return badPaymentRequest(error);
+    // Journal d'incidents : étape exacte, vraie erreur, et surtout « paiement déjà encaissé ou non ».
+    const notFound = String(error?.message || "") === "Inscription introuvable";
+    const report = await (notFound ? reportRefusal : reportFailure)(context, {
+      step: trace.step,
+      flow: "status",
+      registrationId,
+      error,
+      paid: trace.paid,
+    });
+    return badRequest(notFound ? "Inscription introuvable" : report.message, notFound ? 404 : report.status);
   }
 }

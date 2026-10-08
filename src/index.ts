@@ -27,6 +27,8 @@ import { onRequestPost as postHelloAssoResume } from "./routes/api/public/paymen
 import { onRequestGet as getTarifs } from "./routes/api/public/tarifs";
 import { onRequestGet as getCommune } from "./routes/api/public/commune.js";
 import { handleCleanupCron } from "./routes/cron/cleanup-abandoned.js";
+import { runHealthChecks } from "./routes/cron/health-check.js";
+import { INCIDENT_ACTION, REFUSAL_ACTION, reportFailure } from "./routes/_lib/diagnostics.js";
 
 type RouteContext = { request: Request; env: Env };
 
@@ -131,6 +133,54 @@ async function getAdminInscriptionStatus(request: Request, env: Env): Promise<Re
   });
 }
 
+// Journal d'incidents : blocages techniques (public.erreur) et refus métier (public.refus).
+// Même jeton que /api/admin/inscription/status.
+//   ?hours=72   fenêtre (1 à 2160 h)       ?limit=100  nombre max de lignes (≤ 500)
+//   ?type=erreur|refus                      ?id=INC-XXXXXX  retrouver une référence donnée à un adhérent
+async function getAdminIncidents(request: Request, env: Env): Promise<Response> {
+  const authError = await requireAdminStatusToken(request, env);
+  if (authError) return authError;
+
+  const url = new URL(request.url);
+  const hours = Math.min(Math.max(Number(url.searchParams.get("hours")) || 72, 1), 24 * 90);
+  const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 100, 1), 500);
+  const type = (url.searchParams.get("type") || "").toLowerCase();
+  const incidentId = (url.searchParams.get("id") || "").trim().toUpperCase();
+  const since = new Date(Date.now() - hours * 3_600_000).toISOString();
+
+  const actions = type === "erreur" ? [INCIDENT_ACTION] : type === "refus" ? [REFUSAL_ACTION] : [INCIDENT_ACTION, REFUSAL_ACTION];
+  const binds: (string | number)[] = [...actions, since];
+  let sql = `SELECT id, action, entity_id, details, ip, created_at FROM audit_logs
+             WHERE action IN (${actions.map(() => "?").join(", ")}) AND created_at >= ?`;
+  if (incidentId) {
+    sql += ` AND json_extract(details, '$.incidentId') = ?`;
+    binds.push(incidentId);
+  }
+  sql += ` ORDER BY created_at DESC LIMIT ?`;
+  binds.push(limit);
+
+  const { results } = await env.DB.prepare(sql).bind(...binds).all<{
+    id: string; action: string; entity_id: string | null; details: string | null; ip: string; created_at: string;
+  }>();
+
+  const incidents = (results || []).map((row) => {
+    let details: Record<string, unknown> = {};
+    try { details = row.details ? JSON.parse(row.details) : {}; } catch { /* détails illisibles */ }
+    return { at: row.created_at, type: row.action === INCIDENT_ACTION ? "erreur" : "refus", registrationId: row.entity_id, ip: row.ip, ...details };
+  });
+
+  const summary: Record<string, number> = {};
+  for (const incident of incidents as Array<Record<string, unknown>>) {
+    const key = `${incident.type} | ${incident.step ?? "?"} | ${incident.kind ?? "?"}`;
+    summary[key] = (summary[key] || 0) + 1;
+  }
+
+  return Response.json({
+    ok: true,
+    data: { generated_at: new Date().toISOString(), window_hours: hours, count: incidents.length, summary, incidents },
+  });
+}
+
 async function routeApi(request: Request, env: Env, pathname: string): Promise<Response> {
   if (request.method === "OPTIONS") return new Response(null, { status: 204 });
 
@@ -146,6 +196,10 @@ async function routeApi(request: Request, env: Env, pathname: string): Promise<R
 
   if (pathname === "/api/admin/inscription/status" && request.method === "GET") {
     return getAdminInscriptionStatus(request, env);
+  }
+
+  if (pathname === "/api/admin/inscription/incidents" && request.method === "GET") {
+    return getAdminIncidents(request, env);
   }
 
   const context: RouteContext = { request, env };
@@ -208,9 +262,16 @@ export default {
       try {
         response = await routeApi(request, env, pathname);
       } catch (caught) {
-        const message = caught instanceof Error ? caught.message : "Erreur interne";
-        console.error("[inscription] Erreur non gérée:", message);
-        response = Response.json({ error: "Une erreur est survenue. Veuillez réessayer ou contacter le club." }, { status: 500 });
+        // Dernier filet : l'erreur est consignée (étape « worker.unhandled », chemin appelé) au lieu de disparaître.
+        const report = await reportFailure({ env, request }, {
+          step: "worker.unhandled",
+          flow: "worker",
+          error: caught,
+          technical: true,
+          kind: "unhandled",
+          extra: { path: pathname, method: request.method },
+        });
+        response = Response.json({ error: `Une erreur est survenue. Veuillez réessayer ou contacter le club. (Référence : ${report.incidentId})` }, { status: 500 });
       }
     } else {
       response = await env.ASSETS.fetch(request);
@@ -225,6 +286,14 @@ export default {
       handleCleanupCron(env).then(
         (r: unknown) => console.log("[cron] handleCleanupCron:", JSON.stringify(r)),
         (e: unknown) => console.error("[cron] handleCleanupCron a échoué", e instanceof Error ? e.message : String(e)),
+      ),
+    );
+    // Contrôle de santé du paiement en ligne (config, D1, identifiants HelloAsso) : alerte le club
+    // AVANT qu'un adhérent ne soit bloqué.
+    ctx.waitUntil(
+      runHealthChecks(env).then(
+        (r: unknown) => console.log("[cron] runHealthChecks:", JSON.stringify(r)),
+        (e: unknown) => console.error("[cron] runHealthChecks a échoué", e instanceof Error ? e.message : String(e)),
       ),
     );
   },

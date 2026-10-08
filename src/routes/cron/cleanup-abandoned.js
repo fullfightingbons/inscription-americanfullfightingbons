@@ -20,6 +20,8 @@
  * Idempotent : peut être appelé plusieurs fois sans effet de bord.
  */
 
+import { reportFailure } from "../_lib/diagnostics.js";
+
 const ABANDONED_AFTER_HOURS = 48; // délai de grâce avant purge (heures)
 const BATCH_SIZE = 50;            // max d'inscriptions traitées par exécution
 
@@ -107,6 +109,7 @@ async function processAbandonedBatch(env, db, cutoffIso) {
       processed++;
     } catch (err) {
       console.error(`[cron/cleanup] Erreur pour inscription ${row.id}:`, err?.message ?? String(err));
+      await reportFailure({ env }, { step: "cron.cleanup", flow: "cron", registrationId: row.id, error: err, technical: true, kind: "cleanup_failed" });
       details.push({ id: row.id, status: "error", error: err?.message });
       errors++;
     }
