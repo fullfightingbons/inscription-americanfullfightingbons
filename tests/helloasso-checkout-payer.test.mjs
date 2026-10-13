@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { resetHelloAssoTokenCache } from "../src/routes/_lib/helloasso-token.js";
 
 import { createHelloAssoCheckout } from "../src/routes/api/public/inscription.js";
 
@@ -29,6 +30,7 @@ function isoDateYearsAgo(years) {
 // Installe un mock de fetch qui répond au call OAuth puis capture le corps
 // envoyé à /checkout-intents ; restitue le fetch original après le test.
 async function withMockedFetch(run) {
+  resetHelloAssoTokenCache(); // le jeton est mis en cache par l'isolat : chaque test repart à zéro
   const originalFetch = global.fetch;
   let capturedBody = null;
   global.fetch = async (url, init) => {

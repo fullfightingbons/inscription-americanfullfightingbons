@@ -51,7 +51,9 @@ export async function runHealthChecks(env) {
 
   // 3. Authentification HelloAsso (inutile si la configuration est déjà incomplète).
   if (configOk) {
-    await run("helloasso_auth", "health.helloasso_auth", () => getHelloAssoAccessToken(env));
+    // forceRefresh : on veut vérifier que HelloAsso accepte réellement les identifiants,
+    // pas relire un jeton gardé en cache par l'isolat.
+    await run("helloasso_auth", "health.helloasso_auth", () => getHelloAssoAccessToken(env, { forceRefresh: true }));
   }
 
   return { ok: results.every((r) => r.ok), results };

@@ -1,5 +1,6 @@
 import { badRequest } from "./data.js";
 import { HelloAssoApiError, extractFieldErrors } from "./diagnostics.js";
+import { acquireHelloAssoToken, invalidateHelloAssoToken } from "./helloasso-token.js";
 
 const FETCH_TIMEOUT_MS = 12_000; // 12 s pour les appels externes (aligné sur inscription.js)
 
@@ -51,7 +52,9 @@ function getHelloAssoBaseUrl(env) {
     : "https://api.helloasso.com/v5";
 }
 
-async function getHelloAssoAccessToken(env) {
+// Appel réseau réel à /oauth2/token (jamais mis en cache ici) ; les appelants passent par
+// getHelloAssoAccessToken / acquireHelloAssoToken (incident INC-EM2X2A : 429, error code 1015).
+async function requestHelloAssoAccessToken(env) {
   if (!env.HELLOASSO_CLIENT_ID || !env.HELLOASSO_CLIENT_SECRET) {
     throw new HelloAssoApiError("HelloAsso n'est pas configuré", { kind: "config", endpoint: "POST /oauth2/token" });
   }
@@ -78,24 +81,43 @@ async function getHelloAssoAccessToken(env) {
       providerMessage,
     });
   }
-  return result.access_token;
+  return { token: result.access_token, expiresIn: result.expires_in };
+}
+
+/**
+ * Jeton d'accès HelloAsso, réutilisé jusqu'à son expiration (cache en mémoire).
+ * `forceRefresh: true` force une vraie demande à HelloAsso — utilisé par le contrôle
+ * de santé, qui doit vérifier que les identifiants sont réellement acceptés.
+ */
+async function getHelloAssoAccessToken(env, options = {}) {
+  const { token } = await acquireHelloAssoToken(env, requestHelloAssoAccessToken, options);
+  return token;
 }
 
 async function helloAssoRequest(env, path, method = "GET", body = null) {
   if (!env.HELLOASSO_ORGANIZATION_SLUG) {
     throw new HelloAssoApiError("Le slug d'organisation HelloAsso est manquant", { kind: "config", endpoint: `${method} ${path}` });
   }
-  const token = await getHelloAssoAccessToken(env);
-  const response = await fetch(`${getHelloAssoBaseUrl(env)}${path}`, {
+  let { token, cached: tokenFromCache } = await acquireHelloAssoToken(env, requestHelloAssoAccessToken);
+  const send = (bearer) => fetch(`${getHelloAssoBaseUrl(env)}${path}`, {
     method,
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${bearer}`,
       Accept: "application/json",
       ...(body ? { "content-type": "application/json" } : {}),
     },
     body: body ? JSON.stringify(body) : null,
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
+  let response = await send(token);
+  // 401 avec un jeton servi par le cache = jeton périmé/révoqué : on l'oublie et on
+  // réessaie UNE fois avec un jeton neuf (un 401 sur jeton neuf reste une vraie erreur).
+  if (response.status === 401 && tokenFromCache) {
+    try { await response.body?.cancel(); } catch { /* corps déjà consommé */ }
+    invalidateHelloAssoToken(env, token);
+    ({ token } = await acquireHelloAssoToken(env, requestHelloAssoAccessToken, { forceRefresh: true }));
+    response = await send(token);
+  }
   const text = await response.text().catch(() => "");
   let result = null;
   try {

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { resetHelloAssoTokenCache } from "../src/routes/_lib/helloasso-token.js";
 
 import {
   HelloAssoApiError,
@@ -102,6 +103,7 @@ function makeDb(row = makeRegistration(), { failLock = false } = {}) {
 // Mock de fetch : HelloAsso (jeton, checkout, lecture d'un checkout) + Brevo (alertes).
 async function withMockedNetwork(options, run) {
   const { tokenStatus = 200, createStatus = 200, createBody = null, intents = { [OLD_INTENT]: null } } = options;
+  resetHelloAssoTokenCache(); // le jeton est mis en cache par l'isolat : chaque test repart à zéro
   const original = global.fetch;
   const calls = { brevo: [], post: 0 };
   global.fetch = async (url, init = {}) => {

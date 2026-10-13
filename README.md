@@ -171,6 +171,13 @@ ORDER BY created_at DESC LIMIT 50;
 
 **Contrôle de santé** (`cron/health-check.js`, lancé par le même cron que la purge) : vérifie les secrets (noms manquants uniquement), la base D1 et l'acceptation des identifiants HelloAsso (une demande de jeton par exécution). Un échec est consigné (`health.*`) et alerté **avant** qu'un adhérent ne soit bloqué. Le cron est quotidien ; pour une surveillance plus serrée, augmenter la fréquence de `triggers.crons` dans `wrangler.json` (la purge est idempotente).
 
+**Cache du jeton HelloAsso** (`_lib/helloasso-token.js`) : le jeton OAuth (`POST /oauth2/token`) est gardé en mémoire de l'isolat Workers jusqu'à son expiration (`expires_in`, moins 2 minutes de marge) et réutilisé par la création de paiement, la reprise et la lecture de statut. Avant, chaque appel en redemandait un neuf, ce qui a fini par provoquer un `429 / error code: 1015` (limitation de débit Cloudflare devant HelloAsso, incident INC-EM2X2A du 13/10/2026). Détails :
+- aucune migration ni binding à ajouter (cache en mémoire uniquement) ; chaque isolat garde son propre jeton ;
+- un échec d'authentification n'est jamais mis en cache ;
+- si HelloAsso répond `401` à un jeton servi par le cache (jeton révoqué avant l'heure), il est oublié et l'appel est réessayé **une seule fois** avec un jeton neuf — un `401` sur un jeton tout juste émis reste une vraie erreur de configuration (`provider_auth`) ;
+- le contrôle de santé quotidien force toujours une vraie demande (`forceRefresh`), pour vérifier que les identifiants sont bien acceptés ;
+- les tests qui simulent `/oauth2/token` doivent appeler `resetHelloAssoTokenCache()` avant chaque scénario.
+
 **Données personnelles** : aucune donnée du formulaire n'est copiée dans le journal : seulement la référence du dossier, l'étape, l'adresse IP (comme les autres entrées d'`audit_logs`) et la réponse technique de HelloAsso, tronquée à 600 caractères. Cette réponse peut citer la valeur qu'HelloAsso a refusée (par exemple une adresse e-mail invalide) : à garder en tête pour la durée de conservation de `audit_logs`.
 
 ## Accès CSE Thalès hors période d'ouverture

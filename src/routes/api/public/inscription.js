@@ -14,6 +14,7 @@
 import { badRequest, json } from "../../_lib/data.js";
 import { getClientIp, writeAuditLog } from "../../_lib/audit.js";
 import { HelloAssoApiError, helloAssoErrorFromResponse, reportFailure, reportRefusal } from "../../_lib/diagnostics.js";
+import { acquireHelloAssoToken, invalidateHelloAssoToken } from "../../_lib/helloasso-token.js";
 import { isMinor, calculateTotals, toBool, normalizeInstallmentCount, findActiveExercise, normalizeNameForComparison, normalizeDateForComparison, normalizeEmail } from "../../_lib/helpers.js";
 import {
   assertAdditionalOrderItemsStock,
@@ -470,7 +471,10 @@ export async function uploadRequiredFile(env, registrationId, file, targetName, 
 
 // ─── HelloAsso ────────────────────────────────────────────────────────────────
 
-async function getHelloAssoToken(env) {
+// Appel réseau réel à /oauth2/token. Ne pas l'appeler directement : passer par
+// acquireHelloAssoToken (_lib/helloasso-token.js), qui réutilise le jeton jusqu'à
+// son expiration — voir l'incident INC-EM2X2A (429 / error code 1015).
+async function requestHelloAssoToken(env) {
   const baseUrl = env.HELLOASSO_ENV === "sandbox"
     ? "https://api.helloasso-sandbox.com"
     : "https://api.helloasso.com";
@@ -493,7 +497,7 @@ async function getHelloAssoToken(env) {
       httpStatus: 502, endpoint: "POST /oauth2/token",
     });
   }
-  return data.access_token;
+  return { token: data.access_token, expiresIn: data.expires_in };
 }
 
 /**
@@ -516,7 +520,7 @@ export async function createHelloAssoCheckout(env, payload, totals, registration
   const installmentPlan = buildInstallmentPlan(amountCents, payload.payment?.installmentCount);
   payload.payment = { ...(payload.payment || {}), installmentCount: installmentPlan.installmentCount, schedule: installmentPlan.schedule };
 
-  const token = await getHelloAssoToken(env);
+  let { token, cached: tokenFromCache } = await acquireHelloAssoToken(env, requestHelloAssoToken);
   const origin = getPublicOrigin(env);
 
   const firstName = String(payload.identity?.firstName || "").trim();
@@ -586,15 +590,25 @@ export async function createHelloAssoCheckout(env, payload, totals, registration
   const baseUrl = env.HELLOASSO_ENV === "sandbox"
     ? "https://api.helloasso-sandbox.com/v5"
     : "https://api.helloasso.com/v5";
-  const response = await fetch(
+  const sendCheckout = (bearer) => fetch(
     `${baseUrl}/organizations/${env.HELLOASSO_ORGANIZATION_SLUG}/checkout-intents`,
     {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
       body:    JSON.stringify(body),
       signal:  AbortSignal.timeout(FETCH_TIMEOUT_MS),
     },
   );
+  let response = await sendCheckout(token);
+  // Un 401 avec un jeton servi par le cache signifie « jeton périmé ou révoqué » et non
+  // « identifiants refusés » : on l'oublie et on réessaie UNE fois avec un jeton neuf.
+  // (Un 401 avec un jeton tout juste émis reste une vraie erreur de configuration.)
+  if (response.status === 401 && tokenFromCache) {
+    try { await response.body?.cancel(); } catch { /* corps déjà consommé */ }
+    invalidateHelloAssoToken(env, token);
+    ({ token } = await acquireHelloAssoToken(env, requestHelloAssoToken, { forceRefresh: true }));
+    response = await sendCheckout(token);
+  }
   if (!response.ok) {
     throw await helloAssoErrorFromResponse(response, {
       what: "checkout",
