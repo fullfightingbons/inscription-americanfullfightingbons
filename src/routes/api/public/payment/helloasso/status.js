@@ -22,6 +22,7 @@ import {
   updateRegistrationPayment,
 } from "../../../../_lib/public-payments.js";
 import { generateAdherentPdfWithAttachments, fetchPhotoDocument } from "../../../../_lib/pdf.js";
+import { uint8ToBase64 } from "../../../../_lib/base64.js";
 import { generateCotisationReceiptPdf } from "../../../../_lib/cotisation-receipt.js";
 import { isMinor, toBool, findActiveExercise, seasonLabelFromExercise, disciplineFromFormula, normalizeNameForComparison, normalizeDateForComparison, normalizeEmail } from "../../../../_lib/helpers.js";
 import {
@@ -639,22 +640,6 @@ export async function insertPassRegionJournal(db, adherentId, nom, prenom, total
 
 // ─── Encodage base64 binaire (Cloudflare Workers — pas de btoa sur bytes > 127) ─
 
-function uint8ToBase64(bytes) {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  let result = "";
-  const len = bytes.length;
-  for (let i = 0; i < len; i += 3) {
-    const b0 = bytes[i];
-    const b1 = i + 1 < len ? bytes[i + 1] : 0;
-    const b2 = i + 2 < len ? bytes[i + 2] : 0;
-    result += chars[b0 >> 2];
-    result += chars[((b0 & 3) << 4) | (b1 >> 4)];
-    result += i + 1 < len ? chars[((b1 & 15) << 2) | (b2 >> 6)] : "=";
-    result += i + 2 < len ? chars[b2 & 63] : "=";
-  }
-  return result;
-}
-
 // ─── Construction du dossier normalisé pour generateAdherentPdf ───────────────
 
 function buildRegistrationPayload(registration, dossier, adherentId, exercise) {
@@ -731,7 +716,9 @@ async function generateConfirmationReceipt(env, registration, dossier, adherentI
 
 // ─── Email de confirmation de paiement ───────────────────────────────────────
 
-export async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId, exercise, paymentSnapshot = null) {
+// `prebuilt` : résultat de prepareRegistrationPdf, pour réutiliser le PDF déjà généré dans la même
+// requête au lieu de le refaire (cf. prepareRegistrationPdf). Sans lui, le PDF est généré ici.
+export async function sendPaymentConfirmedAlert(env, registration, dossier, adherentId, exercise, paymentSnapshot = null, prebuilt = null) {
   if (!env.BREVO_API_KEY) return;
   const clubRecipient = env.SIGNUP_ALERT_TO || "club@americanfullfightingbons.fr";
   const registrantRecipient = String(registration.email || "").trim().toLowerCase();
@@ -763,12 +750,12 @@ export async function sendPaymentConfirmedAlert(env, registration, dossier, adhe
   // réponse HTTP de refléter le succès du paiement — cohérent avec
   // storeRegistrationPdf qui traite déjà cet échec comme non bloquant.
   let pdfContent = null;
+  let pdfSkipped = [];
   let fileName = `inscription-affbc-${String(registration.id || "").slice(0, 8)}.pdf`;
   try {
-    const payload  = buildRegistrationPayload(registration, dossier, adherentId, exercise);
-    const photo    = await fetchPhotoDocument(env, registration.documents_json);
-    const pdfBytes = await generateAdherentPdfWithAttachments(payload, photo, env);
-    pdfContent = uint8ToBase64(pdfBytes);
+    const built = prebuilt || await buildRegistrationPdf(env, registration, dossier, adherentId, exercise);
+    pdfSkipped = built?.skipped || [];
+    if (built?.bytes) pdfContent = uint8ToBase64(built.bytes);
   } catch (error) {
     console.error("[sendPaymentConfirmedAlert] Génération PDF impossible, envoi de l'email sans pièce jointe:", error?.message ?? String(error));
   }
@@ -792,9 +779,21 @@ export async function sendPaymentConfirmedAlert(env, registration, dossier, adhe
   }
   const receiptContent = receipt ? uint8ToBase64(receipt.bytes) : null;
 
-  const recapNote = pdfContent
+  // Pièces volumineuses laissées hors du PDF (cf. pdf.js, budget de fusion) : on le dit, elles ne sont pas perdues.
+  const skippedLabels = pdfSkipped.map((entry) => entry.label).join(", ");
+  const skippedNote = pdfSkipped.length
+    ? `<p><strong>Pièces non annexées au PDF (volumineuses) :</strong> ${skippedLabels}. Elles sont conservées et consultables depuis la fiche adhérent dans le logiciel de gestion.</p>`
+    : "";
+  const skippedTextLine = pdfSkipped.length
+    ? `Pièces non annexées au PDF (volumineuses) : ${skippedLabels} — à consulter depuis la fiche adhérent.`
+    : null;
+
+  // Le récapitulatif peut être retiré de l'e-mail si Brevo refuse l'envoi (cf. plus bas).
+  const buildRecapNote = (withRecap) => (pdfContent && withRecap)
     ? "<p><strong>Pièce jointe :</strong> le dossier PDF récapitulatif est joint à cet email.</p>"
-    : "<p style=\"color:#a23521\"><strong>⚠️ Le PDF récapitulatif n'a pas pu être généré automatiquement.</strong> Il peut être régénéré manuellement depuis la fiche adhérent dans le logiciel de gestion.</p>";
+    : pdfContent
+      ? "<p style=\"color:#a23521\"><strong>⚠️ Le PDF récapitulatif n'a pas pu être joint à cet email</strong> (envoi refusé par le service e-mail, probablement à cause de sa taille). Il est disponible depuis la fiche adhérent dans le logiciel de gestion.</p>"
+      : "<p style=\"color:#a23521\"><strong>⚠️ Le PDF récapitulatif n'a pas pu être généré automatiquement.</strong> Il peut être régénéré manuellement depuis la fiche adhérent dans le logiciel de gestion.</p>";
 
   // Certificat médical obligatoire mais non fourni à l'inscription : l'adhérent a coché la case
   // d'engagement (cf. _lib/medical-certificate.js). Le bureau et l'adhérent reçoivent le même
@@ -810,9 +809,9 @@ export async function sendPaymentConfirmedAlert(env, registration, dossier, adhe
 
   // Le message est construit par une fonction pour pouvoir être refait SANS le reçu si Brevo
   // refusait l'envoi : le reçu ne doit jamais rendre l'e-mail de confirmation moins fiable.
-  const buildMessage = (withReceipt) => {
+  const buildMessage = (withReceipt, withRecap = true) => {
     const attachment = [];
-    if (pdfContent) attachment.push({ name: fileName, content: pdfContent });
+    if (pdfContent && withRecap) attachment.push({ name: fileName, content: pdfContent });
     if (withReceipt && receipt) attachment.push({ name: receipt.filename, content: receiptContent });
 
     const receiptMissing = receiptFailed || (receipt && !withReceipt);
@@ -842,7 +841,7 @@ export async function sendPaymentConfirmedAlert(env, registration, dossier, adhe
       <p><strong>Montant :</strong> ${Number(registration.montant_total || 0).toFixed(2)} €</p>
       <p><strong>Référence inscription :</strong> ${registration.id}</p>
       <p><strong>Fiche adhérent créée (ID) :</strong> ${adherentId}</p>
-      ${recapNote}${receiptNote}${certificateNote}${certificateReusedNote}
+      ${buildRecapNote(withRecap)}${skippedNote}${receiptNote}${certificateNote}${certificateReusedNote}
       <p style="color:#888;font-size:12px">
       La fiche adhérent est maintenant visible dans le logiciel de gestion,
       onglet <strong>Adhérents</strong>. Si une tenue a été commandée,
@@ -856,7 +855,12 @@ export async function sendPaymentConfirmedAlert(env, registration, dossier, adhe
         `Montant : ${Number(registration.montant_total || 0).toFixed(2)} €`,
                          `Référence : ${registration.id}`,
                          `Fiche adhérent ID : ${adherentId}`,
-                         pdfContent ? `PDF joint : ${fileName}` : "PDF non généré automatiquement — à régénérer depuis la fiche adhérent.",
+                         (pdfContent && withRecap)
+                           ? `PDF joint : ${fileName}`
+                           : pdfContent
+                             ? "PDF non joint (envoi refusé, probablement trop volumineux) — à consulter depuis la fiche adhérent."
+                             : "PDF non généré automatiquement — à régénérer depuis la fiche adhérent.",
+                         skippedTextLine,
                          receiptTextLine,
                          certificateDeferred ? "Certificat médical à fournir : engagement pris à l'inscription, rappels automatiques jusqu'à validation par le bureau." : null,
                          certificateReused ? "Certificat médical : certificat déjà validé réutilisé, rien à fournir." : null,
@@ -876,28 +880,97 @@ export async function sendPaymentConfirmedAlert(env, registration, dossier, adhe
     body: JSON.stringify(message),
   });
 
-  try {
-    let response = await postToBrevo(buildMessage(Boolean(receipt)));
-    // Refus explicite de Brevo (4xx) alors que le reçu était joint : on renvoie l'e-mail sans lui,
-    // avec la mention correspondante. Pas de nouvel essai sur une erreur réseau ou 5xx : l'e-mail
-    // a pu partir, un second envoi le doublerait.
-    if (!response.ok && receipt && response.status >= 400 && response.status < 500) {
-      console.error(`[Brevo] Envoi refusé (HTTP ${response.status}) avec le reçu joint, nouvel essai sans le reçu :`, await response.text().catch(() => ""));
-      response = await postToBrevo(buildMessage(false));
+  // Chaîne de repli sur refus EXPLICITE de Brevo (4xx) : on retire d'abord le reçu (comportement
+  // historique), puis le récapitulatif — pièce la plus lourde, donc la plus probable cause d'un
+  // refus (Brevo : 4 Mo par pièce jointe) —, et en dernier recours tout. Mieux vaut un e-mail de
+  // confirmation sans pièce jointe, avec la mention correspondante, que pas d'e-mail du tout.
+  // Pas de nouvel essai sur une erreur réseau ou 5xx : l'e-mail a pu partir, un second envoi le
+  // doublerait. Un refus 4xx n'a rien envoyé, donc ces essais ne peuvent pas créer de doublon.
+  const attempts = [];
+  const addAttempt = (withReceipt, withRecap) => {
+    if (!attempts.some((a) => a.withReceipt === withReceipt && a.withRecap === withRecap)) {
+      attempts.push({ withReceipt, withRecap });
     }
-    if (!response.ok) {
-      console.error(`[Brevo] Echec envoi email confirmation : HTTP ${response.status}`, await response.text().catch(() => ""));
+  };
+  const hasReceipt = Boolean(receipt);
+  const hasRecap = Boolean(pdfContent);
+  addAttempt(hasReceipt, hasRecap);
+  if (hasReceipt && hasRecap) addAttempt(false, true);   // sans le reçu
+  if (hasReceipt && hasRecap) addAttempt(true, false);   // sans le récapitulatif
+  if (hasReceipt || hasRecap) addAttempt(false, false);  // sans aucune pièce jointe
+  const describeAttempt = ({ withReceipt, withRecap }) =>
+    withReceipt && withRecap ? "avec les pièces jointes"
+      : withRecap ? "sans le reçu"
+        : withReceipt ? "sans le récapitulatif"
+          : "sans pièce jointe";
+
+  try {
+    for (let i = 0; i < attempts.length; i += 1) {
+      const response = await postToBrevo(buildMessage(attempts[i].withReceipt, attempts[i].withRecap));
+      if (response.ok) break;
+      const detail = await response.text().catch(() => "");
+      const refused = response.status >= 400 && response.status < 500;
+      const next = attempts[i + 1];
+      if (refused && next) {
+        console.error(`[Brevo] Envoi refusé (HTTP ${response.status}) ${describeAttempt(attempts[i])}, nouvel essai ${describeAttempt(next)} :`, detail);
+        continue;
+      }
+      console.error(`[Brevo] Echec envoi email confirmation : HTTP ${response.status}`, detail);
+      break;
     }
   } catch (err) {
     console.error("[Brevo] Echec envoi email confirmation:", err?.message ?? String(err));
   }
 }
 
-async function storeRegistrationPdf(env, registration, dossier, adherentId, exercise) {
+/**
+ * Génère le dossier PDF d'inscription (récapitulatif + pièces fusionnées dans la limite du
+ * budget d'octets, cf. pdf.js). Lève en cas d'échec ; les appelants décident du repli.
+ *
+ * @returns {Promise<{ bytes: Uint8Array, skipped: {key: string, label: string, name: string, size: number}[] }>}
+ *          `skipped` : pièces volumineuses NON fusionnées (restent consultables dans la fiche adhérent).
+ */
+async function buildRegistrationPdf(env, registration, dossier, adherentId, exercise) {
+  const payload = buildRegistrationPayload(registration, dossier, adherentId, exercise);
+  const photo   = await fetchPhotoDocument(env, registration.documents_json);
+  const skipped = [];
+  const bytes   = await generateAdherentPdfWithAttachments(payload, photo, env, { skipped });
+  return { bytes, skipped };
+}
+
+/**
+ * Version non bloquante de buildRegistrationPdf, à appeler UNE FOIS par requête : le résultat est
+ * ensuite transmis à storeRegistrationPdf (stockage R2) ET à sendPaymentConfirmedAlert (e-mail).
+ * Avant, chacun régénérait le PDF — fusion pdf-lib comprise — donc deux fois le même travail dans
+ * la même requête, ce qui suffisait à dépasser les limites du Worker (erreur Cloudflare 1102) sur
+ * un dossier avec un justificatif volumineux.
+ *
+ * Ne lève jamais : en cas d'échec, `bytes` vaut null (pas de PDF stocké, e-mail envoyé sans lui).
+ *
+ * @returns {Promise<{ bytes: Uint8Array|null, skipped: object[] }>}
+ */
+export async function prepareRegistrationPdf(env, registration, dossier, adherentId, exercise) {
   try {
-    const payload  = buildRegistrationPayload(registration, dossier, adherentId, exercise);
-    const photo    = await fetchPhotoDocument(env, registration.documents_json);
-    const pdfBytes = await generateAdherentPdfWithAttachments(payload, photo, env);      // Uint8Array directement
+    return await buildRegistrationPdf(env, registration, dossier, adherentId, exercise);
+  } catch (error) {
+    console.error("[status] Génération du PDF d'inscription impossible :", error?.message ?? String(error));
+    return { bytes: null, skipped: [] };
+  }
+}
+
+/**
+ * Stocke le PDF dans R2. `prebuilt` (résultat de prepareRegistrationPdf) évite de le régénérer ;
+ * sans lui, la fonction le génère elle-même (comportement d'origine).
+ */
+export async function storeRegistrationPdf(env, registration, dossier, adherentId, exercise, prebuilt = null) {
+  try {
+    let pdfBytes;
+    if (prebuilt) {
+      if (!prebuilt.bytes) return null; // la génération a déjà échoué : rien à stocker
+      pdfBytes = prebuilt.bytes;
+    } else {
+      pdfBytes = (await buildRegistrationPdf(env, registration, dossier, adherentId, exercise)).bytes;
+    }
     const fileName = `inscription-affbc-${String(registration.id || '').slice(0, 8)}.pdf`;
     const r2Key    = `adherents/${adherentId}/inscription-${String(registration.id).slice(0, 8)}.pdf`;
 
@@ -911,6 +984,7 @@ async function storeRegistrationPdf(env, registration, dossier, adherentId, exer
 
     return { key: r2Key, fileName };
   } catch (e) {
+    console.error("[status] storeRegistrationPdf : stockage du PDF impossible :", e?.message ?? String(e));
     return null; // non bloquant
   }
 }
@@ -1130,8 +1204,12 @@ export async function onRequestGet(context) {
         .bind(registration.adherent_id)
         .first();
       if (adherentRow && !adherentRow.pdf_inscription_storage_path) {
-        const storedPdf = await storeRegistrationPdf(
+        // Un seul PDF pour le stockage ET l'e-mail (cf. prepareRegistrationPdf).
+        const prebuiltPdf = await prepareRegistrationPdf(
           context.env, registration, dossier, registration.adherent_id, exercise
+        );
+        const storedPdf = await storeRegistrationPdf(
+          context.env, registration, dossier, registration.adherent_id, exercise, prebuiltPdf
         );
         if (storedPdf) {
           const pdfUrl = `/api/storage/fullfighting-pdf/${storedPdf.key}`;
@@ -1152,7 +1230,7 @@ export async function onRequestGet(context) {
                  registration.adherent_id
           ).run();
         }
-        await sendPaymentConfirmedAlert(context.env, registration, dossier, registration.adherent_id, exercise, paymentSnapshot);
+        await sendPaymentConfirmedAlert(context.env, registration, dossier, registration.adherent_id, exercise, paymentSnapshot, prebuiltPdf);
       }
 
       return json({
@@ -1282,8 +1360,12 @@ export async function onRequestGet(context) {
     .run();
 
     // ── Email de confirmation ─────────────────────────────────────────────────
-    const storedPdf = await storeRegistrationPdf(
+    // Un seul PDF pour le stockage ET l'e-mail (cf. prepareRegistrationPdf).
+    const prebuiltPdf = await prepareRegistrationPdf(
       context.env, registration, dossier, adherentId, exercise
+    );
+    const storedPdf = await storeRegistrationPdf(
+      context.env, registration, dossier, adherentId, exercise, prebuiltPdf
     );
     if (storedPdf) {
       const pdfUrl = `/api/storage/fullfighting-pdf/${storedPdf.key}`;
@@ -1306,7 +1388,7 @@ export async function onRequestGet(context) {
     }
 
     // ── Email de confirmation ─────────────────────────────────────────────────
-    await sendPaymentConfirmedAlert(context.env, registration, dossier, adherentId, exercise, paymentSnapshot);
+    await sendPaymentConfirmedAlert(context.env, registration, dossier, adherentId, exercise, paymentSnapshot, prebuiltPdf);
 
     // ── Réponse ───────────────────────────────────────────────────────────────
     return json({

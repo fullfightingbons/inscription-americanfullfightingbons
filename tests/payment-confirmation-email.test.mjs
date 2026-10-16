@@ -10,7 +10,7 @@ import test, { mock, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-import { sendPaymentConfirmedAlert } from "../src/routes/api/public/payment/helloasso/status.js";
+import { sendPaymentConfirmedAlert, storeRegistrationPdf, prepareRegistrationPdf } from "../src/routes/api/public/payment/helloasso/status.js";
 import { calculateTotals } from "../src/routes/_lib/helpers.js";
 
 const latin1 = (buf) => Buffer.from(buf).toString("latin1");
@@ -230,13 +230,112 @@ test("erreur 5xx ou réseau : aucun nouvel essai (l'e-mail a pu partir, un secon
   assert.equal(b.calls.length, 1);
 });
 
-test("4xx sans reçu joint : pas de nouvel essai inutile", async () => {
+const ZERO_TOTAL = (dossier) => ({ ...dossier, computedTotals: { ...dossier.computedTotals, cotisation: 0, total: 0, clothingTotal: 0, tshirtQty: 0, pantalonQty: 0 } });
+
+test("4xx avec le seul récapitulatif joint : un dernier essai SANS pièce jointe, puis plus rien", async () => {
+  // Le récapitulatif (dossier + pièces fusionnées) est la pièce la plus lourde : c'est lui qu'on retire.
+  const err = silence();
+  const { calls } = mockBrevo([{ status: 400 }]);
+  await sendPaymentConfirmedAlert(makeEnv({ adherent: adherentRow({ cotisation: 0 }) }), REGISTRATION, ZERO_TOTAL(makeDossier()), ADHERENT_ID, EXERCISE, SNAPSHOT_PAID);
+  assert.equal(calls.length, 2, "1er essai avec le récapitulatif, 2e sans aucune pièce jointe, puis arrêt");
+  assert.deepEqual(calls[0].body.attachment.map((a) => a.name), ["inscription-affbc-11111111.pdf"]);
+  assert.equal(calls[1].body.attachment, undefined);
+  assert.ok(calls[1].body.htmlContent.includes("Le PDF récapitulatif n'a pas pu être joint"));
+  assert.ok(err.mock.calls.some((c) => String(c.arguments[0]).includes("nouvel essai sans pièce jointe")));
+});
+
+test("récapitulatif refusé (trop lourd) : l'e-mail repart avec le reçu seul et dit où trouver le dossier", async () => {
+  const err = silence();
+  const { calls } = mockBrevo([{ status: 400 }, { status: 400 }, { status: 201 }]);
+  await sendPaymentConfirmedAlert(makeEnv(), REGISTRATION, makeDossier(), ADHERENT_ID, EXERCISE, SNAPSHOT_PAID);
+
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls[0].body.attachment.map((a) => a.name), ["inscription-affbc-11111111.pdf", "Recu-cotisation-Mickael-ANDRIEU-2026-2027.pdf"]);
+  assert.deepEqual(calls[1].body.attachment.map((a) => a.name), ["inscription-affbc-11111111.pdf"], "sans le reçu (comportement historique)");
+  assert.deepEqual(calls[2].body.attachment.map((a) => a.name), ["Recu-cotisation-Mickael-ANDRIEU-2026-2027.pdf"], "sans le récapitulatif");
+  const { htmlContent, textContent } = calls[2].body;
+  assert.ok(htmlContent.includes("Le PDF récapitulatif n'a pas pu être joint"));
+  assert.ok(htmlContent.includes("fiche adhérent"));
+  assert.ok(htmlContent.includes("Reçu de cotisation :</strong> joint à cet email dans un fichier séparé"), "le reçu, lui, est bien joint");
+  assert.ok(textContent.includes("PDF non joint"));
+  assert.ok(!textContent.includes("PDF joint :"));
+  assert.ok(err.mock.calls.some((c) => String(c.arguments[0]).includes("nouvel essai sans le récapitulatif")));
+});
+
+test("Brevo refuse tout : 4 essais au maximum, le dernier sans aucune pièce jointe, sans lever d'erreur", async () => {
+  silence();
+  const { calls } = mockBrevo([{ status: 400, text: '{"code":"invalid_parameter"}' }]);
+  await assert.doesNotReject(() => sendPaymentConfirmedAlert(makeEnv(), REGISTRATION, makeDossier(), ADHERENT_ID, EXERCISE, SNAPSHOT_PAID));
+  assert.equal(calls.length, 4);
+  assert.equal(calls[3].body.attachment, undefined);
+});
+
+test("erreur 5xx au 2e essai : on s'arrête là (l'e-mail a pu partir)", async () => {
+  silence();
+  const { calls } = mockBrevo([{ status: 400 }, { status: 503 }]);
+  await sendPaymentConfirmedAlert(makeEnv(), REGISTRATION, makeDossier(), ADHERENT_ID, EXERCISE, SNAPSHOT_PAID);
+  assert.equal(calls.length, 2);
+});
+
+test("sans aucune pièce à joindre, un seul essai : rien à retirer", async () => {
   silence();
   const { calls } = mockBrevo([{ status: 400 }]);
-  await sendPaymentConfirmedAlert(makeEnv({ adherent: adherentRow({ cotisation: 0 }) }), REGISTRATION,
-    { ...makeDossier(), computedTotals: { ...makeDossier().computedTotals, cotisation: 0, total: 0, clothingTotal: 0, tshirtQty: 0, pantalonQty: 0 } },
-    ADHERENT_ID, EXERCISE, SNAPSHOT_PAID);
+  const prebuilt = { bytes: null, skipped: [] }; // génération du PDF échouée
+  await sendPaymentConfirmedAlert(makeEnv({ adherent: adherentRow({ cotisation: 0 }) }), REGISTRATION, ZERO_TOTAL(makeDossier()), ADHERENT_ID, EXERCISE, SNAPSHOT_PAID, prebuilt);
   assert.equal(calls.length, 1);
+});
+
+// ── PDF généré une seule fois (prebuilt) ─────────────────────────────────────
+
+test("prebuilt : le PDF déjà généré est joint tel quel, sans être régénéré", async () => {
+  const { calls } = mockBrevo();
+  const fake = new TextEncoder().encode("%PDF-1.4\nPDF-DEJA-GENERE\n%%EOF");
+  await sendPaymentConfirmedAlert(makeEnv(), REGISTRATION, makeDossier(), ADHERENT_ID, EXERCISE, SNAPSHOT_PAID, { bytes: fake, skipped: [] });
+  const recap = calls[0].body.attachment[0];
+  assert.equal(recap.name, "inscription-affbc-11111111.pdf");
+  assert.deepEqual(decode(recap), Buffer.from(fake), "les octets joints sont ceux transmis, pas un nouveau PDF");
+});
+
+test("prebuilt sans octets (génération déjà en échec) : e-mail envoyé sans PDF, avec l'avertissement habituel", async () => {
+  const { calls } = mockBrevo();
+  await sendPaymentConfirmedAlert(makeEnv(), REGISTRATION, makeDossier(), ADHERENT_ID, EXERCISE, SNAPSHOT_PAID, { bytes: null, skipped: [] });
+  assert.deepEqual(calls[0].body.attachment.map((a) => a.name), ["Recu-cotisation-Mickael-ANDRIEU-2026-2027.pdf"]);
+  assert.ok(calls[0].body.htmlContent.includes("Le PDF récapitulatif n'a pas pu être généré automatiquement"));
+});
+
+test("pièces volumineuses non fusionnées : l'e-mail les nomme et rassure (elles sont dans la fiche adhérent)", async () => {
+  const { calls } = mockBrevo();
+  const fake = new TextEncoder().encode("%PDF-1.4\n%%EOF");
+  const skipped = [{ key: "passRegionDocument", label: "Justificatif Pass Region", name: "scan.pdf", size: 6_000_000 }];
+  await sendPaymentConfirmedAlert(makeEnv(), REGISTRATION, makeDossier(), ADHERENT_ID, EXERCISE, SNAPSHOT_PAID, { bytes: fake, skipped });
+  const { htmlContent, textContent } = calls[0].body;
+  assert.ok(htmlContent.includes("Pièces non annexées au PDF (volumineuses)"));
+  assert.ok(htmlContent.includes("Justificatif Pass Region"));
+  assert.ok(textContent.includes("Pièces non annexées au PDF (volumineuses) : Justificatif Pass Region"));
+});
+
+test("storeRegistrationPdf : stocke les octets du PDF déjà généré dans R2, sans régénération", async () => {
+  const puts = [];
+  const env = { R2_PDF: { put: async (key, bytes, opts) => { puts.push({ key, bytes, opts }); } } };
+  const fake = new TextEncoder().encode("%PDF-1.4\nDEJA-GENERE\n%%EOF");
+  const stored = await storeRegistrationPdf(env, REGISTRATION, makeDossier(), ADHERENT_ID, EXERCISE, { bytes: fake, skipped: [] });
+  assert.deepEqual(stored, { key: `adherents/${ADHERENT_ID}/inscription-11111111.pdf`, fileName: "inscription-affbc-11111111.pdf" });
+  assert.equal(puts.length, 1);
+  assert.equal(puts[0].bytes, fake);
+  assert.equal(puts[0].opts.httpMetadata.contentType, "application/pdf");
+});
+
+test("storeRegistrationPdf : génération déjà en échec → rien n'est stocké, aucune nouvelle tentative", async () => {
+  const puts = [];
+  const env = { R2_PDF: { put: async (...a) => { puts.push(a); } } };
+  assert.equal(await storeRegistrationPdf(env, REGISTRATION, makeDossier(), ADHERENT_ID, EXERCISE, { bytes: null, skipped: [] }), null);
+  assert.equal(puts.length, 0);
+});
+
+test("prepareRegistrationPdf : un vrai PDF valide, et la liste (vide) des pièces écartées", async () => {
+  const out = await prepareRegistrationPdf(makeEnv(), REGISTRATION, makeDossier(), ADHERENT_ID, EXERCISE);
+  assert.ok(isPdf(Buffer.from(out.bytes)));
+  assert.deepEqual(out.skipped, []);
 });
 
 test("sans clé Brevo : aucun envoi, aucune génération (comportement d'origine)", async () => {

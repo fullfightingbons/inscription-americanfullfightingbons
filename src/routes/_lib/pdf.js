@@ -117,10 +117,12 @@ function formatFileSize(bytes) {
 
 /**
  * @param {string|object} documentsJson  Colonne documents_json (texte JSON ou déjà objet)
- * @returns {{label: string, name: string, size: string}[]}  Pièces jointes présentes
+ * @param {string[]} [notMergedKeys]     Clés des pièces qui ne seront PAS annexées au PDF
+ *          (trop volumineuses, cf. planAttachmentMerge) : signalées sur leur ligne.
+ * @returns {{label: string, name: string, size: string, notMerged: boolean}[]}  Pièces jointes présentes
  *          (hors photoIdentity, déjà affichée en S1 — cf. resolvePhotoImage)
  */
-function describeAttachedDocuments(documentsJson) {
+function describeAttachedDocuments(documentsJson, notMergedKeys = []) {
   let docs = {};
   try {
     docs = typeof documentsJson === 'string'
@@ -133,23 +135,46 @@ function describeAttachedDocuments(documentsJson) {
     .map(([key, label]) => {
       const ref = docs?.[key];
       if (!ref?.key) return null; // pièce non fournie (ex. certificat medical si non requis)
-      return { label, name: safe(ref.name) || label, size: formatFileSize(ref.size) };
+      return {
+        label,
+        name: safe(ref.name) || label,
+        size: formatFileSize(ref.size),
+        notMerged: Array.isArray(notMergedKeys) && notMergedKeys.includes(key),
+      };
     })
     .filter(Boolean);
 }
 
 /**
- * Va chercher, en plus de la photo d'identité (cf. fetchPhotoDocument), les
- * bytes bruts des 3 documents PDF fournis à l'inscription (certificat
- * médical, justificatif Pass Région, justificatif tarif réduit), pour
- * fusion réelle via mergeAttachedPdfs() — cf. pdf-merge.js pour le pourquoi
- * de cette séparation.
+ * Budget d'octets pour les pièces annexées au dossier PDF (somme des pièces).
  *
- * @param {object} env
- * @param {string|object} documentsJson
- * @returns {Promise<{key: string, label: string, name: string, bytes: Uint8Array}[]>}
+ * Pourquoi un plafond : la fusion passe par pdf-lib (PDFDocument.load / copyPages /
+ * save), dont le coût en CPU et en mémoire croît avec le poids des pièces. Un scan
+ * de plusieurs Mo suffit à faire tuer le Worker par Cloudflare (erreur 1102, « Worker
+ * exceeded resource limits ») — et un Worker tué ne passe jamais dans un try/catch :
+ * le dossier reste sans PDF ni e-mail de confirmation. Le plafond protège aussi la
+ * pièce jointe Brevo (4 Mo maximum par fichier : le dossier de synthèse + les pièces
+ * fusionnées doivent rester sous cette limite).
+ *
+ * Une pièce qui ne rentre pas dans le budget n'est PAS fusionnée : elle reste
+ * intacte dans R2, consultable depuis la fiche adhérent, et le dossier PDF le dit
+ * sur sa ligne de la section 7.
  */
-export async function fetchAttachedDocuments(env, documentsJson) {
+export const MAX_MERGED_ATTACHMENTS_BYTES = 3 * 1024 * 1024;
+
+/**
+ * Décide, d'après les tailles déclarées dans documents_json (ref.size, posé à
+ * l'upload), quelles pièces seront fusionnées et lesquelles non — sans lire R2.
+ * Les pièces sont examinées dans l'ordre de ATTACHED_DOC_LABELS ; une pièce qui
+ * dépasse le budget restant est écartée, les suivantes (plus petites) peuvent
+ * encore rentrer. Une pièce sans taille déclarée est acceptée ici : son poids réel
+ * est contrôlé à la lecture (cf. fetchAttachedDocuments).
+ *
+ * @param {string|object} documentsJson
+ * @param {number} [maxTotalBytes]
+ * @returns {{ merge: string[], skipped: {key: string, label: string, name: string, size: number}[] }}
+ */
+export function planAttachmentMerge(documentsJson, maxTotalBytes = MAX_MERGED_ATTACHMENTS_BYTES) {
   let docs = {};
   try {
     docs = typeof documentsJson === 'string'
@@ -159,16 +184,83 @@ export async function fetchAttachedDocuments(env, documentsJson) {
     docs = {};
   }
 
+  const merge = [];
+  const skipped = [];
+  let used = 0;
+  for (const [key, label] of ATTACHED_DOC_LABELS) {
+    const ref = docs?.[key];
+    if (!ref?.bucket || !ref?.key) continue;
+    const declared = Number(ref.size) || 0;
+    if (declared > 0 && used + declared > maxTotalBytes) {
+      skipped.push({ key, label, name: ref.name || label, size: declared });
+      continue;
+    }
+    used += declared;
+    merge.push(key);
+  }
+  return { merge, skipped };
+}
+
+/**
+ * Va chercher, en plus de la photo d'identité (cf. fetchPhotoDocument), les
+ * bytes bruts des 3 documents PDF fournis à l'inscription (certificat
+ * médical, justificatif Pass Région, justificatif tarif réduit), pour
+ * fusion réelle via mergeAttachedPdfs() — cf. pdf-merge.js pour le pourquoi
+ * de cette séparation.
+ *
+ * Les pièces qui dépassent le budget d'octets (cf. MAX_MERGED_ATTACHMENTS_BYTES)
+ * ne sont pas lues : elles sont absentes du résultat et, si `options.skipped` est
+ * un tableau, y sont ajoutées ({key, label, name, size}).
+ *
+ * @param {object} env
+ * @param {string|object} documentsJson
+ * @param {{ maxTotalBytes?: number, skipped?: object[] }} [options]
+ * @returns {Promise<{key: string, label: string, name: string, bytes: Uint8Array}[]>}
+ */
+export async function fetchAttachedDocuments(env, documentsJson, options = {}) {
+  let docs = {};
+  try {
+    docs = typeof documentsJson === 'string'
+      ? JSON.parse(documentsJson || '{}')
+      : (documentsJson || {});
+  } catch (e) {
+    docs = {};
+  }
+
+  const maxTotalBytes = Number.isFinite(options?.maxTotalBytes) ? options.maxTotalBytes : MAX_MERGED_ATTACHMENTS_BYTES;
+  const skipped = Array.isArray(options?.skipped) ? options.skipped : [];
+  const markSkipped = (key, label, ref, size) => {
+    if (skipped.some((entry) => entry.key === key)) return;
+    skipped.push({ key, label, name: ref?.name || label, size });
+    console.warn(`[pdf] piece \"${label}\" non fusionnee (${formatFileSize(size) || 'taille inconnue'} : budget de fusion depasse), a consulter depuis la fiche adherent`);
+  };
+
+  const plan = planAttachmentMerge(docs, maxTotalBytes);
+  plan.skipped.forEach(({ key, label, size }) => markSkipped(key, label, docs?.[key], size));
+
   const results = [];
+  let used = 0;
   for (const [key, label] of ATTACHED_DOC_LABELS) {
     const ref = docs?.[key];
     if (!ref?.bucket || !ref?.key) continue; // piece non fournie (ex. certificat non requis)
+    if (!plan.merge.includes(key)) continue;  // écartée par le plan (trop volumineuse)
     try {
       const bucket = ref.bucket === 'fullfighting-pdf' ? env?.R2_PDF : env?.R2_STORAGE;
       if (!bucket) continue;
       const object = await bucket.get(ref.key);
       if (!object) continue;
+      // Taille connue de l'objet R2 : on évite de le charger en mémoire s'il ne rentre pas.
+      const objectSize = Number(object.size) || 0;
+      if (objectSize > 0 && used + objectSize > maxTotalBytes) {
+        markSkipped(key, label, ref, objectSize);
+        continue;
+      }
       const bytes = new Uint8Array(await object.arrayBuffer());
+      if (used + bytes.length > maxTotalBytes) {
+        markSkipped(key, label, ref, bytes.length);
+        continue;
+      }
+      used += bytes.length;
       results.push({ key, label, name: ref.name || label, bytes });
     } catch (e) {
       // Une piece illisible ne doit pas empecher la recuperation des autres.
@@ -186,16 +278,32 @@ export async function fetchAttachedDocuments(env, documentsJson) {
  * Ne lève jamais d'exception : toute erreur de récupération/fusion des
  * pièces retombe sur le dossier de base seul (comportement historique).
  *
+ * Les pièces trop volumineuses (cf. MAX_MERGED_ATTACHMENTS_BYTES) ne sont pas
+ * fusionnées ; la section 7 du dossier le signale sur leur ligne. Pour savoir
+ * lesquelles (ex. le mentionner dans l'e-mail), passer `options.skipped` : un
+ * tableau qui sera rempli de {key, label, name, size}.
+ *
  * @param {object} registration
  * @param {{bytes: Uint8Array, contentType: string}|null} [photo]
  * @param {object|null} [env]
+ * @param {{ maxTotalBytes?: number, skipped?: object[] }} [options]
  * @returns {Promise<Uint8Array>}
  */
-export async function generateAdherentPdfWithAttachments(registration, photo = null, env = null) {
-  const dossierBytes = await generateAdherentPdf(registration, photo, env);
+export async function generateAdherentPdfWithAttachments(registration, photo = null, env = null, options = {}) {
+  const documentsJson = registration?.documentsJson ?? registration?.documents_json;
+  const maxTotalBytes = Number.isFinite(options?.maxTotalBytes) ? options.maxTotalBytes : MAX_MERGED_ATTACHMENTS_BYTES;
+  const skipped = Array.isArray(options?.skipped) ? options.skipped : [];
+
+  // Le plan est connu AVANT de dessiner le dossier : sa section 7 peut ainsi dire
+  // honnêtement quelles pièces ne sont pas annexées à la suite.
+  const plan = planAttachmentMerge(documentsJson, maxTotalBytes);
+  const registrationForPdf = plan.skipped.length
+    ? { ...registration, attachmentsNotMerged: plan.skipped.map((entry) => entry.key) }
+    : registration;
+
+  const dossierBytes = await generateAdherentPdf(registrationForPdf, photo, env);
   try {
-    const documentsJson = registration?.documentsJson ?? registration?.documents_json;
-    const attachments = await fetchAttachedDocuments(env, documentsJson);
+    const attachments = await fetchAttachedDocuments(env, documentsJson, { maxTotalBytes, skipped });
     if (!attachments.length) return dossierBytes;
     return await mergeAttachedPdfs(dossierBytes, attachments);
   } catch (e) {
@@ -303,7 +411,7 @@ export async function generateAdherentPdf(registration, photo = null, env = null
   const p = new PdfBuilder();
   const photoImage  = await resolvePhotoImage(p, photo);
   const logoImage   = await resolveLogoImage(p, env);
-  const attachedDocs = describeAttachedDocuments(registration.documentsJson ?? registration.documents_json);
+  const attachedDocs = describeAttachedDocuments(registration.documentsJson ?? registration.documents_json, registration.attachmentsNotMerged);
 
   // ── Curseur vertical courant (mm depuis le haut de la page courante) ────────
   let y = 0;
@@ -785,6 +893,11 @@ export async function generateAdherentPdf(registration, photo = null, env = null
     p.text("Documents fournis a l'inscription, annexes en pages supplementaires a la suite de ce dossier.",
            ML/MM, y, { color: MUTED });
     y += 4;
+    if (attachedDocs.some((doc) => doc.notMerged)) {
+      p.text("Les pieces trop volumineuses ne sont pas annexees ici : elles sont conservees et consultables depuis la fiche adherent.",
+             ML/MM, y, { color: MUTED });
+      y += 4;
+    }
     p.text("En cas d'indisponibilite, consultables depuis la fiche adherent - onglet Adherents de l'espace gestion.",
            ML/MM, y, { color: MUTED });
     y += 6;
@@ -798,7 +911,8 @@ export async function generateAdherentPdf(registration, photo = null, env = null
       p.setFont('F2', 6.2);
       p.text(doc.label, ML/MM + 3, y + 5, { color: INK });
       p.setFont('F1', 5.6);
-      const detail = doc.size ? `${doc.name} - ${doc.size}` : doc.name;
+      const baseDetail = doc.size ? `${doc.name} - ${doc.size}` : doc.name;
+      const detail = doc.notMerged ? `${baseDetail} - non annexe (volumineux)` : baseDetail;
       p.text(detail, ML/MM + 75, y + 5, { color: MUTED });
       y += 9;
     });
