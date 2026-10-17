@@ -148,10 +148,72 @@ test("image corrompue : message clair (pas d'erreur technique), rien n'est écri
   assert.equal(env.R2_PDF.puts.length, 0);
 });
 
-test("fichier absent, vide ou trop gros (> 8 Mo) : mêmes refus qu'avant, libellés lisibles", async () => {
+test("fichier absent ou vide : refus avec libellés lisibles", async () => {
   const env = fakeEnv();
   await assert.rejects(() => uploadRequiredFile(env, REG_ID, null, "certificat-medical", false), /certificat médical est obligatoire/);
   await assert.rejects(() => uploadRequiredFile(env, REG_ID, new File([], "vide.pdf", { type: "application/pdf" }), "pass-region", false), /Pass Région est obligatoire/);
-  const big = new File([new Uint8Array(8 * 1024 * 1024 + 1)], "gros.pdf", { type: "application/pdf" });
-  await assert.rejects(() => uploadRequiredFile(env, REG_ID, big, "certificat-medical", false), /certificat médical dépasse 8 Mo/);
+});
+
+// ─── Plafonds par pièce (cf. _lib/upload-limits.js) ──────────────────────────
+
+const MB = 1024 * 1024;
+const CERT_LIMIT = 3 * MB;       // certificat médical : la pièce la plus lourde
+const PASS_LIMIT = 1.5 * MB;     // justificatif Pass Région
+const PROOF_LIMIT = 1.5 * MB;    // justificatif de tarif réduit
+const PHOTO_LIMIT = 2 * MB;
+
+const padTo = (bytes, size) => { const out = new Uint8Array(size); out.set(bytes); return out; };
+
+test("certificat médical au-delà de 3 Mo : refusé avec la taille reçue et la marche à suivre", async () => {
+  const env = fakeEnv();
+  const big = new File([new Uint8Array(CERT_LIMIT + 1)], "gros.pdf", { type: "application/pdf" });
+  await assert.rejects(
+    () => uploadRequiredFile(env, REG_ID, big, "certificat-medical", false),
+    /certificat médical dépasse la taille maximale de 3 Mo \(fichier reçu : 3,1 Mo\)\. Réduisez le PDF ou joignez-le en photo/,
+  );
+  assert.equal(env.R2_PDF.puts.length, 0, "rien n'est écrit dans R2");
+});
+
+test("certificat médical d'exactement 3 Mo : accepté (le plafond est inclus)", async () => {
+  const env = fakeEnv();
+  const ref = await uploadRequiredFile(env, REG_ID, fileOf(padTo(await makePdf(1), CERT_LIMIT), "certif.pdf", "application/pdf"), "certificat-medical", false);
+  assert.equal(ref.size, CERT_LIMIT);
+  assert.equal(env.R2_PDF.puts.length, 1);
+});
+
+test("justificatif Pass Région : plafond de 1,5 Mo (2 Mo refusés, 1,5 Mo acceptés)", async () => {
+  const env = fakeEnv();
+  const two = new File([new Uint8Array(2 * MB)], "scan.pdf", { type: "application/pdf" });
+  await assert.rejects(
+    () => uploadRequiredFile(env, REG_ID, two, "pass-region", false),
+    /Pass Région dépasse la taille maximale de 1,5 Mo \(fichier reçu : 2 Mo\)/,
+  );
+  const ref = await uploadRequiredFile(env, REG_ID, fileOf(padTo(await makePdf(1), PASS_LIMIT), "ok.pdf", "application/pdf"), "pass-region", false);
+  assert.equal(ref.size, PASS_LIMIT);
+});
+
+test("justificatif de tarif réduit : plafond de 1,5 Mo", async () => {
+  const env = fakeEnv();
+  await assert.rejects(
+    () => uploadRequiredFile(env, REG_ID, new File([new Uint8Array(PROOF_LIMIT + 1)], "j.pdf", { type: "application/pdf" }), "justificatif-tarif", false),
+    /justificatif de tarif réduit dépasse la taille maximale de 1,5 Mo/,
+  );
+});
+
+test("photo d'identité au-delà de 2 Mo : refusée avec un message adapté à une photo", async () => {
+  const env = fakeEnv();
+  const big = new File([new Uint8Array(PHOTO_LIMIT + 1)], "portrait.jpg", { type: "image/jpeg" });
+  await assert.rejects(
+    () => uploadRequiredFile(env, REG_ID, big, "photo-identite", true),
+    /photo d'identité dépasse la taille maximale de 2 Mo.*Choisissez une photo plus légère/,
+  );
+  assert.equal(env.R2_STORAGE.puts.length, 0);
+});
+
+test("photo de certificat de 3 Mo pile : acceptée malgré l'enveloppe PDF ajoutée par la conversion", async () => {
+  const env = fakeEnv();
+  const ref = await uploadRequiredFile(env, REG_ID, fileOf(padTo(jpegBytes(), CERT_LIMIT), "scan.jpg", "image/jpeg"), "certificat-medical", false);
+  assert.equal(ref.contentType, "application/pdf");
+  assert.ok(ref.size > CERT_LIMIT, "le PDF produit pèse un peu plus que la photo d'origine");
+  assert.ok(ref.size <= CERT_LIMIT + 64 * 1024, "mais reste dans la tolérance de conversion");
 });

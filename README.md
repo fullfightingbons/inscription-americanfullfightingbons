@@ -116,7 +116,16 @@ Le reçu est un fichier **séparé** du récapitulatif pour que l'adhérent puis
 - Un échec de génération du reçu n'empêche jamais l'envoi : l'e-mail part avec le seul récapitulatif et le signale. Si Brevo refuse l'envoi (erreur 4xx) alors que le reçu est joint, l'e-mail est renvoyé sans lui.
 - Pas de reçu pour une inscription gratuite (total nul).
 - Les e-mails envoyés à la **réception** du dossier (avant paiement) n'ont pas de reçu : rien n'est encore réglé.
-- Limites Brevo : 4 Mo par pièce jointe, 20 Mo par message.
+- Limite Brevo : 20 Mo pour le message entier (pièces et contenu, base64 compris). Le « 4 Mo par pièce » de leur
+  documentation vise les pièces de template et de campagne, pas l'envoi par l'API utilisé ici.
+- **Plafond de taille par pièce déposée**, contrôlé dans le navigateur ET côté serveur avant toute écriture
+  (`src/routes/_lib/upload-limits.js`, qui explique le choix des valeurs) : photo d'identité 2 Mo, certificat médical 3 Mo
+  (la pièce la plus lourde), justificatif Pass Région 1,5 Mo, justificatif de tarif réduit 1,5 Mo — soit 6 Mo au plus pour les
+  trois justificatifs. Il garantit que toutes les pièces d'un dossier tiennent dans le dossier PDF annexé et dans l'e-mail, et
+  que le Worker reste sous sa limite de mémoire
+  (128 Mo ; au-delà Cloudflare le tue avec l'erreur 1102, sans e-mail). Un dossier antérieur au plafond dont les pièces
+  dépassent 6 Mo cumulés voit les plus lourdes laissées hors du PDF (mentionné dans le dossier et l'e-mail) : elles restent
+  dans R2 et dans la fiche adhérent.
 
 Secret Cloudflare : `BREVO_API_KEY` (sans lui, aucun e-mail n'est envoyé).
 
@@ -201,7 +210,8 @@ Sur téléphone, la personne photographie souvent son document : une photo JPEG/
 comprise). Un PDF est stocké tel quel, comme avant.
 
 Côté navigateur (`public/assets/inscription.js`) : les photos sont réduites avant l'envoi
-(≤ 2 200 px, JPEG), le format et le poids (8 Mo) sont contrôlés avec un message clair, et
+(≤ 2 200 px, JPEG), le format et le poids (plafond par pièce, cf. ci-dessus ; une photo est allégée jusqu'à passer sous le plafond, seul un PDF trop
+lourd est refusé) sont contrôlés avec un message clair, et
 une erreur réseau est expliquée en français. Sur **appareil tactile uniquement**
 (`pointer: coarse`), le brouillon est aussi enregistré pendant la saisie, la touche « Aller »
 du clavier fait « Continuer », et les formats acceptés sont rappelés sous les champs. Le parcours

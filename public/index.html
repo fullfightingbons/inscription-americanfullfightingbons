@@ -235,7 +235,7 @@
               <label class="field field-full">
                 <span>Photo d'identité</span>
                 <input id="photoIdentity" type="file" accept="image/jpeg,image/png" required>
-                <small>JPEG ou PNG uniquement. Obligatoire pour le dossier.</small>
+                <small>JPEG ou PNG uniquement, 2 Mo maximum (allégée automatiquement). Obligatoire pour le dossier.</small>
               </label>
             </div>
             <div class="panel-actions">
@@ -397,6 +397,7 @@
               <label class="field conditional" data-show-when="proofNeeded">
                 <span>Justificatif tarif réduit</span>
                 <input id="proProofDocument" type="file" accept="application/pdf,image/*">
+                <small>PDF ou photo, 1,5 Mo maximum par document (une photo est allégée automatiquement).</small>
               </label>
               <div class="field-full conditional" data-show-when="proofPro">
                 <details class="size-guide">
@@ -425,6 +426,7 @@
               <label class="field conditional field-full" data-show-when="passRegion">
                 <span>Justificatif Pass Région</span>
                 <input id="passRegionDocument" type="file" accept="application/pdf,image/*">
+                <small>PDF ou photo, 1,5 Mo maximum par document (une photo est allégée automatiquement).</small>
               </label>
             </div>
 
@@ -488,6 +490,7 @@
               <label class="field field-full">
                 <span>Certificat médical / certificat compétition</span>
                 <input id="medicalCertificate" type="file" accept="application/pdf,image/*">
+                <small>PDF ou photo, 3 Mo maximum par document (une photo est allégée automatiquement).</small>
               </label>
               <div class="info-banner">Le certificat médical d'aptitude est valable <strong>3 ans</strong>, sauf évolution de l'état de santé du pratiquant depuis sa délivrance — dans ce cas, un nouveau certificat est nécessaire même si les 3 ans ne sont pas écoulés.</div>
               <div class="info-banner">L'ajout du certificat peut aussi se faire <strong>directement depuis l'espace membre</strong> de l'adhérent.</div>

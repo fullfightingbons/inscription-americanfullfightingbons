@@ -882,7 +882,7 @@ export async function sendPaymentConfirmedAlert(env, registration, dossier, adhe
 
   // Chaîne de repli sur refus EXPLICITE de Brevo (4xx) : on retire d'abord le reçu (comportement
   // historique), puis le récapitulatif — pièce la plus lourde, donc la plus probable cause d'un
-  // refus (Brevo : 4 Mo par pièce jointe) —, et en dernier recours tout. Mieux vaut un e-mail de
+  // refus (Brevo limite le message entier à 20 Mo, base64 compris) —, et en dernier recours tout. Mieux vaut un e-mail de
   // confirmation sans pièce jointe, avec la mention correspondante, que pas d'e-mail du tout.
   // Pas de nouvel essai sur une erreur réseau ou 5xx : l'e-mail a pu partir, un second envoi le
   // doublerait. Un refus 4xx n'a rien envoyé, donc ces essais ne peuvent pas créer de doublon.

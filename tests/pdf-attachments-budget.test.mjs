@@ -57,8 +57,8 @@ const ref = (key, name, size) => ({ bucket: "fullfighting-pdf", key, name, ...(s
 
 // ── planAttachmentMerge ──────────────────────────────────────────────────────
 
-test("le budget par défaut laisse de la marge sous les 4 Mo par pièce jointe de Brevo", () => {
-  assert.ok(MAX_MERGED_ATTACHMENTS_BYTES < 4 * MB);
+test("le budget par défaut est celui du pire cas autorisé : 3 justificatifs de 2 Mo", () => {
+  assert.equal(MAX_MERGED_ATTACHMENTS_BYTES, 6 * MB);
 });
 
 test("plan : tout rentre dans le budget → tout est fusionné", () => {
@@ -68,7 +68,7 @@ test("plan : tout rentre dans le budget → tout est fusionné", () => {
   assert.deepEqual(plan.skipped, []);
 });
 
-test("plan : un justificatif Pass Région de 6 Mo est écarté, le certificat léger reste fusionné", () => {
+test("plan : un justificatif Pass Région de 6 Mo qui fait dépasser le budget est écarté, le certificat léger reste fusionné", () => {
   const docs = { medicalCertificate: ref("c", "c.pdf", 300_000), passRegionDocument: ref("p", "scan.pdf", 6 * MB) };
   const plan = planAttachmentMerge(docs);
   assert.deepEqual(plan.merge, ["medicalCertificate"]);
@@ -162,7 +162,7 @@ test("le dossier PDF dit honnêtement que la pièce volumineuse n'est pas annex�
   const bucket = spyBucket({});
   const registration = {
     ...BASE_REGISTRATION,
-    documentsJson: JSON.stringify({ passRegionDocument: ref("p-key", "scan.pdf", 6 * MB) }),
+    documentsJson: JSON.stringify({ passRegionDocument: ref("p-key", "scan.pdf", 7 * MB) }),
   };
   const pdf = latin1(await generateAdherentPdfWithAttachments(registration, null, { R2_PDF: bucket }));
   assert.ok(pdf.includes("non annexe"), "la ligne de la pièce porte la mention");

@@ -28,8 +28,14 @@ import { finalizeFreeRegistration } from "../../_lib/free-registration.js";
 import { CSE_ACCESS_FORMULA, readCseAccessHeader, verifyCseAccessCode } from "../../_lib/cse-access.js";
 import { findReusableCertificate, resolveCertificateSubmission } from "../../_lib/medical-certificate.js";
 import { imageToPdfBytes, sniffFileKind } from "../../_lib/image-to-pdf.js";
+import {
+  CONVERSION_OVERHEAD_BYTES,
+  findOversizedUpload,
+  oversizeMessage,
+  uploadLimitFor,
+} from "../../_lib/upload-limits.js";
 
-const MAX_FILE_SIZE = 8 * 1024 * 1024; // 8 Mo
+// Plafonds de taille des pièces : cf. _lib/upload-limits.js (par type de pièce, pourquoi et comment les changer).
 const FETCH_TIMEOUT_MS = 12_000; // 12 s pour les appels externes
 const REQUIRED_QS_KEYS = [
   "familyCardiacDeath",
@@ -409,7 +415,8 @@ function replaceFileExtension(name, extension) {
 export async function uploadRequiredFile(env, registrationId, file, targetName, preferImage = false) {
   const label = DOCUMENT_LABELS[targetName] || targetName;
   if (!(file instanceof File) || !file.size) throw new Error(`Le document ${label} est obligatoire`);
-  if (file.size > MAX_FILE_SIZE) throw new Error(`Le document ${label} dépasse ${Math.round(MAX_FILE_SIZE / 1024 / 1024)} Mo`);
+  const maxBytes = uploadLimitFor(targetName, preferImage);
+  if (file.size > maxBytes) throw new Error(oversizeMessage(label, file.size, maxBytes, { photo: preferImage }));
 
   // Valeurs par défaut = comportement historique (fichier stocké tel quel, avec
   // son type et son nom). Elles ne changent que dans les deux cas ci-dessous,
@@ -452,6 +459,11 @@ export async function uploadRequiredFile(env, registrationId, file, targetName, 
     } else {
       throw new Error(`Le document ${label} doit être un PDF ou une photo (JPEG ou PNG)`);
     }
+  }
+
+  // Poids réel stocké : une conversion photo → PDF ne doit pas faire exploser le plafond (marge pour l'enveloppe PDF).
+  if (!preferImage && storedBytes && storedBytes.byteLength > maxBytes + CONVERSION_OVERHEAD_BYTES) {
+    throw new Error(oversizeMessage(label, storedBytes.byteLength, maxBytes, { photo: false }));
   }
 
   const bucket = preferImage ? (env.R2_STORAGE || env.R2_PDF) : (env.R2_PDF || env.R2_STORAGE);
@@ -899,6 +911,12 @@ async function handleInscriptionPost(context, trace) {
         403,
       );
     }
+
+    // Plafond de taille des pièces : refusé tout de suite, avant la moindre écriture (ligne brouillon,
+    // R2, HelloAsso) — un refus ne laisse rien à nettoyer. Le navigateur applique le même plafond
+    // (et allège les photos) ; ceci protège contre un envoi qui le contournerait.
+    const oversizedUpload = findOversizedUpload(formData);
+    if (oversizedUpload) return badRequest(oversizedUpload.message);
 
     trace.step = "inscription.validation";
     const validation = validatePayload(payload);

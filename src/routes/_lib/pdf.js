@@ -47,6 +47,7 @@
  *   médaillon-texte par défaut.
  */
 
+import { MAX_MERGED_ATTACHMENTS_BYTES } from './upload-limits.js';
 import { currentSeasonLabel } from './helpers.js';
 import { addAutoImage, addPngImage, safe, PdfBuilder, buildPdfDocument, measureTextWidth, ML, MM, CW } from './pdf-engine.js';
 import { mergeAttachedPdfs } from './pdf-merge.js';
@@ -146,21 +147,19 @@ function describeAttachedDocuments(documentsJson, notMergedKeys = []) {
 }
 
 /**
- * Budget d'octets pour les pièces annexées au dossier PDF (somme des pièces).
+ * Budget d'octets pour les pièces annexées au dossier PDF (somme des pièces) — valeur et
+ * justification (mémoire du Worker, limite Brevo) dans upload-limits.js.
  *
- * Pourquoi un plafond : la fusion passe par pdf-lib (PDFDocument.load / copyPages /
- * save), dont le coût en CPU et en mémoire croît avec le poids des pièces. Un scan
- * de plusieurs Mo suffit à faire tuer le Worker par Cloudflare (erreur 1102, « Worker
- * exceeded resource limits ») — et un Worker tué ne passe jamais dans un try/catch :
- * le dossier reste sans PDF ni e-mail de confirmation. Le plafond protège aussi la
- * pièce jointe Brevo (4 Mo maximum par fichier : le dossier de synthèse + les pièces
- * fusionnées doivent rester sous cette limite).
+ * Les plafonds imposés à l'inscription (par type de pièce, 6 Mo au total pour les trois justificatifs)
+ * garantissent que TOUTES les pièces d'un dossier conforme rentrent dans ce budget : elles sont toutes annexées. Il ne joue
+ * plus que de filet de sécurité pour un dossier déposé avant ces plafonds, dont une pièce énorme
+ * ferait tuer le Worker (erreur Cloudflare 1102 : un Worker tué ne passe dans aucun try/catch,
+ * le dossier reste sans PDF ni e-mail).
  *
- * Une pièce qui ne rentre pas dans le budget n'est PAS fusionnée : elle reste
- * intacte dans R2, consultable depuis la fiche adhérent, et le dossier PDF le dit
- * sur sa ligne de la section 7.
+ * Une pièce qui ne rentre pas dans le budget n'est PAS fusionnée : elle reste intacte dans R2,
+ * consultable depuis la fiche adhérent, et le dossier PDF le dit sur sa ligne de la section 7.
  */
-export const MAX_MERGED_ATTACHMENTS_BYTES = 3 * 1024 * 1024;
+export { MAX_MERGED_ATTACHMENTS_BYTES };
 
 /**
  * Décide, d'après les tailles déclarées dans documents_json (ref.size, posé à

@@ -59,8 +59,18 @@ const IS_TOUCH_DEVICE = (() => {
   catch (e) { return false; }
 })();
 
-// Même plafond que le serveur (MAX_FILE_SIZE dans src/routes/api/public/inscription.js).
-const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+// Mêmes plafonds que le serveur (src/routes/_lib/upload-limits.js : un test vérifie qu'ils ne divergent pas).
+// Un plafond par pièce : toutes doivent pouvoir être annexées au dossier PDF puis jointes à l'e-mail de
+// confirmation, pour un total de 6 Mo au plus sur les trois justificatifs. Le certificat médical, pièce la
+// plus lourde, a le plafond le plus large. Les photos sont allégées automatiquement pour rentrer dessous ;
+// seul un PDF trop lourd est refusé (un PDF ne peut pas être recompressé dans le navigateur).
+const UPLOAD_MAX_BYTES = {
+  photoIdentity:      2 * 1024 * 1024,
+  medicalCertificate: 3 * 1024 * 1024,
+  passRegionDocument: 1.5 * 1024 * 1024,
+  proProofDocument:   1.5 * 1024 * 1024,
+};
+const uploadLimitLabel = (bytes) => `${String(bytes / (1024 * 1024)).replace('.', ',')} Mo`;
 
 // ─── État ─────────────────────────────────────────────────────────────────────
 
@@ -1559,13 +1569,22 @@ const PHOTO_SKIP_UNDER_BYTES = 400 * 1024;  // déjà assez léger : on ne retou
 // (Le serveur les convertit ensuite en PDF — cf. image-to-pdf.js.)
 const DOCUMENT_MAX_DIMENSION = 2200;        // px, plus grand côté : un A4 reste lisible
 const DOCUMENT_JPEG_QUALITY  = 0.85;
+// Si, à cette qualité, la photo dépasse encore le plafond d'envoi (page très détaillée, grand capteur),
+// on réessaie en réduisant progressivement la définition puis la qualité jusqu'à passer sous le plafond.
+const DOCUMENT_IMAGE_ATTEMPTS = [
+  { maxDimension: DOCUMENT_MAX_DIMENSION, quality: DOCUMENT_JPEG_QUALITY },
+  { maxDimension: 1800, quality: 0.75 },
+  { maxDimension: 1500, quality: 0.65 },
+  { maxDimension: 1200, quality: 0.55 },
+];
+const UPLOAD_SAFETY_MARGIN_BYTES = 32 * 1024; // le serveur enveloppe le JPEG dans un PDF : quelques Ko en plus
 
 // Pièces jointes du formulaire : libellé affiché dans les messages + étape où elles se choisissent.
 const FILE_RULES = {
-  photoIdentity:      { id: 'photoIdentity',      label: 'la photo d\'identité',             step: 1, photo: true },
-  passRegionDocument: { id: 'passRegionDocument', label: 'le justificatif Pass Région',      step: 3 },
-  proProofDocument:   { id: 'proProofDocument',   label: 'le justificatif de tarif réduit',  step: 3 },
-  medicalCertificate: { id: 'medicalCertificate', label: 'le certificat médical',            step: 4 },
+  photoIdentity:      { id: 'photoIdentity',      label: 'la photo d\'identité',             step: 1, photo: true, maxBytes: UPLOAD_MAX_BYTES.photoIdentity },
+  passRegionDocument: { id: 'passRegionDocument', label: 'le justificatif Pass Région',      step: 3, maxBytes: UPLOAD_MAX_BYTES.passRegionDocument },
+  proProofDocument:   { id: 'proProofDocument',   label: 'le justificatif de tarif réduit',  step: 3, maxBytes: UPLOAD_MAX_BYTES.proProofDocument },
+  medicalCertificate: { id: 'medicalCertificate', label: 'le certificat médical',            step: 4, maxBytes: UPLOAD_MAX_BYTES.medicalCertificate },
 };
 const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 
@@ -1657,20 +1676,24 @@ async function compressPhotoFile(file) {
   return compressed.size < file.size ? compressed : file;
 }
 
-// Justificatif : un PDF part TEL QUEL (comportement inchangé). Une photo est
-// toujours ré-encodée en JPEG : ça applique la rotation EXIF (sinon la page
-// PDF produite par le serveur serait couchée), convertit HEIC/WebP quand le
-// navigateur sait les lire, et ramène le poids sous le plafond d'envoi.
-async function prepareDocumentFile(file) {
+// Justificatif : un PDF part TEL QUEL (comportement inchangé ; trop lourd, il est refusé avec un message
+// clair par checkChosenFile / findFileProblem). Une photo est toujours ré-encodée en JPEG : ça applique
+// la rotation EXIF (sinon la page PDF produite par le serveur serait couchée), convertit HEIC/WebP quand
+// le navigateur sait les lire, et ramène le poids SOUS le plafond d'envoi — en réessayant avec une
+// définition et une qualité plus basses tant que nécessaire (DOCUMENT_IMAGE_ATTEMPTS).
+async function prepareDocumentFile(file, maxBytes) {
   if (!file || !(file instanceof File)) return file;
   if (isPdfFile(file)) return file;
   if (!looksLikeImage(file)) return file;
-  const converted = await reencodeImageAsJpeg(file, {
-    maxDimension: DOCUMENT_MAX_DIMENSION,
-    quality: DOCUMENT_JPEG_QUALITY,
-    flatten: true,
-  });
-  return converted || file;
+  const target = maxBytes - UPLOAD_SAFETY_MARGIN_BYTES;
+  let best = null;
+  for (const attempt of DOCUMENT_IMAGE_ATTEMPTS) {
+    const converted = await reencodeImageAsJpeg(file, { ...attempt, flatten: true });
+    if (!converted) break; // image non décodable : inutile d'insister
+    if (!best || converted.size < best.size) best = converted;
+    if (converted.size <= target) return converted;
+  }
+  return best || file;
 }
 
 // Contrôle immédiat à la sélection d'un fichier (volontairement indulgent : on
@@ -1687,7 +1710,7 @@ function checkChosenFile(rule) {
       message = `Ce fichier n'est pas une image : ${rule.label} doit être une photo JPEG ou PNG.`;
     }
   } else if (isPdfFile(file)) {
-    if (file.size > MAX_UPLOAD_BYTES) message = `Ce PDF est trop volumineux (8 Mo maximum) pour ${rule.label}.`;
+    if (file.size > rule.maxBytes) message = `Ce PDF est trop volumineux (${uploadLimitLabel(rule.maxBytes)} maximum) pour ${rule.label}. Réduisez-le, ou joignez plutôt une photo du document (elle sera allégée automatiquement).`;
   } else if (file.type && !looksLikeImage(file)) {
     message = `Format non pris en charge pour ${rule.label} : joignez un PDF ou une photo (JPEG ou PNG).`;
   }
@@ -1710,8 +1733,13 @@ function findFileProblem(entries) {
   const iosTip = ' Sur iPhone : Réglages > Appareil photo > Formats > « Le plus compatible ».';
   for (const { rule, file } of entries) {
     const Label = capitalize(rule.label);
-    if (file.size > MAX_UPLOAD_BYTES) {
-      return { step: rule.step, message: `${Label} est trop volumineux (8 Mo maximum). Choisissez un fichier plus léger${rule.photo ? '' : ' ou une photo'}.` };
+    if (file.size > rule.maxBytes) {
+      return {
+        step: rule.step,
+        message: rule.photo
+          ? `${Label} est trop volumineuse (${uploadLimitLabel(rule.maxBytes)} maximum). Choisissez une photo plus légère.`
+          : `${Label} est trop volumineux (${uploadLimitLabel(rule.maxBytes)} maximum). Réduisez le PDF, ou joignez plutôt une photo du document.`,
+      };
     }
     if (rule.photo) {
       if (file.type && !okImageTypes.includes(file.type)) {
@@ -1814,7 +1842,7 @@ async function submitForm(event) {
       const rawDoc = g(id)?.files?.[0];
       if (!rawDoc) continue;
       if (btn && !isPdfFile(rawDoc) && looksLikeImage(rawDoc)) btn.textContent = 'Préparation des documents…';
-      const doc = await prepareDocumentFile(rawDoc);
+      const doc = await prepareDocumentFile(rawDoc, FILE_RULES[id].maxBytes);
       formData.append(id, doc);
       fileEntries.push({ rule: FILE_RULES[id], file: doc });
     }
